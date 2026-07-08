@@ -1,0 +1,13 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "pseudorandom-provenance",
+      "runtimeExecutable": "/Users/ednaho/pseudorandom-provenance/node_modules/.bin/next",
+      "runtimeArgs": ["dev"],
+      "port": 3001,
+      "autoPort": true,
+      "cwd": "/Users/ednaho/pseudorandom-provenance"
+    }
+  ]
+}

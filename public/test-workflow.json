@@ -1,0 +1,96 @@
+{
+  "1": {
+    "inputs": {
+      "ckpt_name": "Juggernaut_X_RunDiffusion_Hyper.safetensors"
+    },
+    "class_type": "CheckpointLoaderSimple",
+    "_meta": { "title": "Load Checkpoint" }
+  },
+  "2": {
+    "inputs": {
+      "control_net_name": "control_v11p_sd15_depth.pth"
+    },
+    "class_type": "ControlNetLoader",
+    "_meta": { "title": "Load ControlNet (Depth)" }
+  },
+  "3": {
+    "inputs": {
+      "lora_name": "add_detail.safetensors",
+      "strength_model": 0.8,
+      "strength_clip": 0.8,
+      "model": ["1", 0],
+      "clip": ["1", 1]
+    },
+    "class_type": "LoraLoader",
+    "_meta": { "title": "Load LoRA" }
+  },
+  "4": {
+    "inputs": {
+      "text": "a photorealistic architectural rendering of a modern building",
+      "clip": ["1", 1]
+    },
+    "class_type": "CLIPTextEncode",
+    "_meta": { "title": "Positive Prompt" }
+  },
+  "5": {
+    "inputs": {
+      "text": "blurry, low quality, distorted",
+      "clip": ["1", 1]
+    },
+    "class_type": "CLIPTextEncode",
+    "_meta": { "title": "Negative Prompt" }
+  },
+  "6": {
+    "inputs": {
+      "seed": "__PSEUDORANDOM_SEED__",
+      "steps": 20,
+      "cfg": "__ADHERENCE__",
+      "sampler_name": "dpmpp_2m",
+      "scheduler": "karras",
+      "denoise": "__ITERATION__",
+      "model": ["1", 0],
+      "positive": ["4", 0],
+      "negative": ["5", 0],
+      "latent_image": ["7", 0]
+    },
+    "class_type": "KSampler",
+    "_meta": { "title": "KSampler" }
+  },
+  "7": {
+    "inputs": {
+      "width": 1024,
+      "height": 1024,
+      "batch_size": 1
+    },
+    "class_type": "EmptyLatentImage",
+    "_meta": { "title": "Empty Latent Image" }
+  },
+  "8": {
+    "inputs": {
+      "samples": ["6", 0],
+      "vae": ["1", 2]
+    },
+    "class_type": "VAEDecode",
+    "_meta": { "title": "VAE Decode" }
+  },
+  "9": {
+    "inputs": {
+      "filename_prefix": "__PSEUDORANDOM_TEMP_PATH__",
+      "images": ["8", 0]
+    },
+    "class_type": "SaveImage",
+    "_meta": { "title": "Save Image" }
+  },
+  "10": {
+    "inputs": {
+      "image": "__MASK_SOFTNESS__",
+      "control_net": ["2", 0],
+      "conditioning": ["4", 0],
+      "strength": 0.9,
+      "start_percent": 0.0,
+      "end_percent": 1.0
+    },
+    "class_type": "ControlNetApplyAdvanced",
+    "_meta": { "title": "Apply ControlNet" }
+  }
+}
