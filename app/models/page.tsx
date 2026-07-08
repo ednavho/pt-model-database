@@ -9,6 +9,8 @@ interface SearchParams {
   status?: string;
 }
 
+const VETTING_STATUSES = ['vetted', 'potentially_problematic', 'unknown'] as const;
+
 export default async function ModelsPage({
   searchParams,
 }: {
@@ -22,6 +24,9 @@ export default async function ModelsPage({
   } = await supabase.auth.getUser();
   const internal = isInternalUser(user?.email);
 
+  const selectedCategories = category ? category.split(',').filter(Boolean) : [];
+  const selectedStatuses = status ? status.split(',').filter(Boolean) : [];
+
   let query = supabase
     .from('models')
     .select(
@@ -29,8 +34,8 @@ export default async function ModelsPage({
     )
     .order('name', { ascending: true });
 
-  if (category) query = query.eq('model_categories.name', category);
-  if (status) query = query.eq('vetting_statuses.name', status);
+  if (selectedCategories.length > 0) query = query.in('model_categories.name', selectedCategories);
+  if (selectedStatuses.length > 0) query = query.in('vetting_statuses.name', selectedStatuses);
 
   const { data: models, error } = await query;
 
@@ -42,11 +47,13 @@ export default async function ModelsPage({
     return `${mb.toFixed(0)} MB`;
   };
 
-  const buildUrl = (params: Record<string, string | undefined>) => {
+  const toggleValue = (list: string[], value: string) =>
+    list.includes(value) ? list.filter((v) => v !== value) : [...list, value];
+
+  const buildUrl = (cats: string[], stats: string[]) => {
     const p = new URLSearchParams();
-    Object.entries(params).forEach(([k, v]) => {
-      if (v) p.set(k, v);
-    });
+    if (cats.length > 0) p.set('category', cats.join(','));
+    if (stats.length > 0) p.set('status', stats.join(','));
     const s = p.toString();
     return s ? `/models?${s}` : '/models';
   };
@@ -67,60 +74,68 @@ export default async function ModelsPage({
           Filters
         </div>
         <div className="space-y-3">
-          <div className="flex items-center gap-2">
-            <span className="text-xs text-zinc-500 w-14 shrink-0">Category</span>
-            <div className="flex flex-wrap gap-1">
-              <Link
-                href={buildUrl({ status })}
-                className={`text-xs px-2 py-1 border rounded-sm ${
-                  !category
-                    ? 'border-zinc-800 bg-zinc-900 text-white'
-                    : 'border-zinc-200 text-zinc-600 hover:border-zinc-400'
-                }`}
-              >
-                All
-              </Link>
-              {MODEL_CATEGORIES.map((cat) => (
-                <Link
-                  key={cat}
-                  href={buildUrl({ category: cat, status })}
-                  className={`text-xs px-2 py-1 border rounded-sm ${
-                    category === cat
-                      ? 'border-zinc-800 bg-zinc-900 text-white'
-                      : 'border-zinc-200 text-zinc-600 hover:border-zinc-400'
-                  }`}
-                >
-                  {cat}
-                </Link>
-              ))}
-              {internal && (
-                <Link
-                  href="/models/new"
-                  className="text-xs border border-zinc-300 rounded-sm px-3 py-1 text-zinc-900 hover:bg-zinc-50 transition-colors ml-2"
-                >
-                  + Add Model
-                </Link>
-              )}
+          <div className="flex items-center gap-3">
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-zinc-500 w-14 shrink-0">Category</span>
+              <div className="flex flex-wrap gap-1">
+                {MODEL_CATEGORIES.map((cat) => (
+                  <Link
+                    key={cat}
+                    href={buildUrl(toggleValue(selectedCategories, cat), selectedStatuses)}
+                    className={`text-xs px-2 py-1 border rounded-sm ${
+                      selectedCategories.includes(cat)
+                        ? 'border-zinc-800 bg-zinc-900 text-white'
+                        : 'border-zinc-200 text-zinc-600 hover:border-zinc-400'
+                    }`}
+                  >
+                    {cat}
+                  </Link>
+                ))}
+              </div>
             </div>
+            {selectedCategories.length === 0 ? (
+              <span className="text-xs text-zinc-300 cursor-default">Clear</span>
+            ) : (
+              <Link href={buildUrl([], selectedStatuses)} className="text-xs text-zinc-500 hover:text-zinc-800">
+                Clear
+              </Link>
+            )}
+            {internal && (
+              <Link
+                href="/models/new"
+                className="text-xs border border-zinc-300 rounded-sm px-3 py-1 text-zinc-900 hover:bg-zinc-50 transition-colors ml-auto"
+              >
+                + Add Model
+              </Link>
+            )}
           </div>
 
-          <div className="flex items-center gap-2">
-            <span className="text-xs text-zinc-500 w-14 shrink-0">Status</span>
-            <div className="flex gap-1">
-              {['vetted', 'potentially_problematic', 'unknown'].map((s) => (
-                <Link
-                  key={s}
-                  href={buildUrl({ category, status: s === status ? undefined : s })}
-                  className={`text-xs px-2 py-1 border rounded-sm ${
-                    status === s
-                      ? 'border-zinc-800 bg-zinc-900 text-white'
-                      : 'border-zinc-200 text-zinc-600 hover:border-zinc-400'
-                  }`}
-                >
-                  {s === 'potentially_problematic' ? 'problematic' : s}
-                </Link>
-              ))}
+          <div className="flex items-center gap-3">
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-zinc-500 w-14 shrink-0">Status</span>
+              <div className="flex gap-1">
+                {VETTING_STATUSES.map((s) => (
+                  <Link
+                    key={s}
+                    href={buildUrl(selectedCategories, toggleValue(selectedStatuses, s))}
+                    className={`text-xs px-2 py-1 border rounded-sm ${
+                      selectedStatuses.includes(s)
+                        ? 'border-zinc-800 bg-zinc-900 text-white'
+                        : 'border-zinc-200 text-zinc-600 hover:border-zinc-400'
+                    }`}
+                  >
+                    {s === 'potentially_problematic' ? 'problematic' : s}
+                  </Link>
+                ))}
+              </div>
             </div>
+            {selectedStatuses.length === 0 ? (
+              <span className="text-xs text-zinc-300 cursor-default">Clear</span>
+            ) : (
+              <Link href={buildUrl(selectedCategories, [])} className="text-xs text-zinc-500 hover:text-zinc-800">
+                Clear
+              </Link>
+            )}
           </div>
         </div>
       </div>
@@ -161,7 +176,7 @@ export default async function ModelsPage({
             {!models || models.length === 0 ? (
               <tr>
                 <td colSpan={6} className="text-center text-zinc-400 px-4 py-12 text-sm">
-                  {error ? 'Error loading models.' : 'No models found. Add the first one!'}
+                  {error ? 'Error loading models.' : 'No models found.'}
                 </td>
               </tr>
             ) : (
@@ -212,8 +227,6 @@ export default async function ModelsPage({
       {models && (
         <p className="text-xs text-zinc-400 mt-3 text-right">
           {models.length} model{models.length !== 1 ? 's' : ''}
-          {category ? ` in ${category}` : ''}
-          {status ? `, ${status}` : ''}
         </p>
       )}
     </div>
