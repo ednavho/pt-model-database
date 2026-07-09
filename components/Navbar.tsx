@@ -55,27 +55,19 @@ export default function Navbar() {
 
         <div className="flex items-center gap-4">
           <Link
-            href="/models"
-            className="text-sm text-zinc-600 hover:text-zinc-900"
-          >
-            Models
-          </Link>
-          <Link
             href="/package-workflow"
             className="text-sm text-zinc-600 hover:text-zinc-900"
           >
             Package Workflow
           </Link>
 
-          {user ? (
+          {user && internal && (
             <div className="flex items-center gap-3">
               <span className="text-xs text-zinc-400">
                 {user.email}
-                {internal && (
-                  <span className="ml-1.5 text-zinc-300 font-medium uppercase tracking-wide">
-                    · Internal
-                  </span>
-                )}
+                <span className="ml-1.5 text-zinc-300 font-medium uppercase tracking-wide">
+                  · Internal
+                </span>
               </span>
               <button
                 onClick={handleSignOut}
@@ -84,13 +76,6 @@ export default function Navbar() {
                 Sign Out
               </button>
             </div>
-          ) : (
-            <Link
-              href="/signin"
-              className="text-sm border border-zinc-300 rounded-sm px-3 py-1.5 bg-white text-zinc-900 hover:bg-zinc-50 transition-colors"
-            >
-              Sign In
-            </Link>
           )}
         </div>
       </div>

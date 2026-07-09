@@ -49,6 +49,17 @@ export default async function ModelsPage({
     return `${mb.toFixed(0)} MB`;
   };
 
+  const LABELS: Record<string, string> = {
+    checkpoints: 'Checkpoint',
+    controlnet: 'ControlNet',
+    loras: 'LoRA',
+    clip_vision: 'Clip Vision',
+    ipadapter: 'IPAdapter',
+    vetted: 'Vetted',
+    potentially_problematic: 'Potentially Problematic',
+    unknown: 'Unknown',
+  };
+
   const toggleValue = (list: string[], value: string) =>
     list.includes(value) ? list.filter((v) => v !== value) : [...list, value];
 
@@ -93,7 +104,7 @@ export default async function ModelsPage({
                         : 'border-zinc-200 text-zinc-600 hover:border-zinc-400'
                     }`}
                   >
-                    {cat}
+                    {LABELS[cat] ?? cat}
                   </Link>
                 ))}
               </div>
@@ -129,7 +140,7 @@ export default async function ModelsPage({
                         : 'border-zinc-200 text-zinc-600 hover:border-zinc-400'
                     }`}
                   >
-                    {s === 'potentially_problematic' ? 'problematic' : s}
+                    {LABELS[s] ?? s}
                   </Link>
                 ))}
               </div>
@@ -221,7 +232,7 @@ export default async function ModelsPage({
                       <span className="text-xs text-zinc-400 font-mono">{model.file_name}</span>
                     )}
                   </td>
-                  <td className="px-4 py-3 text-zinc-600 hidden md:table-cell">{model.model_categories?.name}</td>
+                  <td className="px-4 py-3 text-zinc-600 hidden md:table-cell">{LABELS[model.model_categories?.name ?? ''] ?? model.model_categories?.name}</td>
                   <td className="px-4 py-3">
                     <VettingBadge status={model.vetting_statuses?.name as VettingStatus} />
                   </td>
