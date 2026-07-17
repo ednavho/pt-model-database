@@ -32,7 +32,7 @@ export default async function ModelsPage({
   let query = supabase
     .from('models')
     .select(
-      'id,category_id,name,file_name,download_url,attribution,license,size_bytes,vetting_status_id,used_by_workflows,created_at,updated_at,model_categories!inner(name),vetting_statuses!inner(name)'
+      'id,category_id,name,file_name,download_url,attribution,attribution_url,license,data_provenance_notes,size_bytes,vetting_status_id,used_by_workflows,created_at,updated_at,model_categories!inner(name),vetting_statuses!inner(name)'
     )
     .order('name', { ascending: !sortDesc });
 
@@ -116,14 +116,22 @@ export default async function ModelsPage({
                 Clear
               </Link>
             )}
-            {internal && (
+            <div className="ml-auto flex items-center gap-2">
               <Link
-                href="/models/new"
-                className="text-xs border border-zinc-300 rounded-sm px-3 py-1 text-zinc-900 hover:bg-zinc-50 transition-colors ml-auto"
+                href="/submit-model"
+                className="text-xs border border-zinc-200 rounded-sm px-3 py-1 text-zinc-600 hover:border-zinc-400 transition-colors"
               >
-                + Add Model
+                Request a model
               </Link>
-            )}
+              {internal && (
+                <Link
+                  href="/models/new"
+                  className="text-xs border border-zinc-300 rounded-sm px-3 py-1 text-zinc-900 hover:bg-zinc-50 transition-colors"
+                >
+                  + Add Model
+                </Link>
+              )}
+            </div>
           </div>
 
           <div className="flex items-center gap-3">
@@ -219,7 +227,7 @@ export default async function ModelsPage({
                 </td>
               </tr>
             ) : (
-              (models as Model[]).map((model) => (
+              (models as unknown as Model[]).map((model) => (
                 <tr key={model.id} className="border-b border-zinc-100 last:border-0 hover:bg-zinc-50">
                   <td className="px-4 py-3">
                     <Link
@@ -232,9 +240,9 @@ export default async function ModelsPage({
                       <span className="text-xs text-zinc-400 font-mono">{model.file_name}</span>
                     )}
                   </td>
-                  <td className="px-4 py-3 text-zinc-600 hidden md:table-cell">{LABELS[model.model_categories?.name ?? ''] ?? model.model_categories?.name}</td>
+                  <td className="px-4 py-3 text-zinc-600 hidden md:table-cell">{LABELS[model.model_categories?.name?.toLowerCase() ?? ''] ?? model.model_categories?.name}</td>
                   <td className="px-4 py-3">
-                    <VettingBadge status={model.vetting_statuses?.name as VettingStatus} />
+                    <VettingBadge status={model.vetting_statuses?.name?.toLowerCase() as VettingStatus} />
                   </td>
                   <td className="px-4 py-3 text-zinc-500 text-xs hidden lg:table-cell">
                     {model.license ?? '—'}
