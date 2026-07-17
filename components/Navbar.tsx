@@ -61,6 +61,13 @@ export default function Navbar() {
             Package Workflow
           </Link>
 
+          <Link
+            href="/image-info"
+            className="text-sm text-zinc-600 hover:text-zinc-900"
+          >
+            Image Info
+          </Link>
+
           {user && internal && (
             <div className="flex items-center gap-3">
               <span className="text-xs text-zinc-400">

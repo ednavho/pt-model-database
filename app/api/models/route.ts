@@ -34,8 +34,7 @@ import { createClient } from '@/utils/supabase/server';
 import { isInternalUser } from '@/utils/auth';
 import { NextRequest, NextResponse } from 'next/server';
 
-const PUBLIC_COLUMNS =
-  'id,category_id,name,file_name,download_url,attribution,attribution_url,license,data_provenance_notes,size_bytes,vetting_status_id,used_by_workflows,created_at,updated_at,model_categories(name),vetting_statuses(name)';
+const PUBLIC_COLUMNS = 'id,name,file_name';
 
 export async function GET(req: NextRequest) {
   try {

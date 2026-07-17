@@ -1,52 +1,173 @@
 'use client';
 
 import {
-  GENERIC_LOADER_CLASS_TYPES,
-  LOADER_FILENAME_INPUT,
-  VETTED_NODE_CLASS_TYPES,
-} from '@/config/vettedNodeTypes';
-import { Model, VettingStatus } from '@/types/database';
+  COMFY_MODEL_FOLDERS,
+  MODEL_FILE_EXTENSIONS,
+  PSEUDOCOMFY_REQUIREMENT,
+  PSEUDO_CLASS_TYPE_PREFIX,
+  PSEUDO_LOAD_MODEL_SNAPSHOT,
+  PSEUDO_SEED_NODE,
+  PSEUDO_VARIABLE_NODE,
+  PSEUDO_VETTED_MODEL_LOADER,
+  SEED_NODE_FIELDS,
+  SNAPSHOT_NODE_FIELDS,
+  TEMP_PATH_TOKEN,
+  VARIABLE_NODE_FIELDS,
+  VETTED_LOADER_FIELDS,
+  seedTokenAt,
+  tokenFromName,
+} from '@/config/pseudoNodeTypes';
+import { ModelDetail } from '@/types/database';
 import { cn } from '@/utils/cn';
 import { useCallback, useRef, useState } from 'react';
 
-// ── Types ──────────────────────────────────────────────────────────────────
+// ── Graph shapes ────────────────────────────────────────────────────────────
 
-type ComfyNode = {
+// API format: flat map of nodeId → node (ComfyUI "Save (API Format)")
+type ComfyAPINode = {
   inputs: Record<string, unknown>;
   class_type: string;
   _meta?: { title?: string };
 };
+type ComfyAPIGraph = Record<string, ComfyAPINode>;
 
-type ComfyGraph = Record<string, ComfyNode>;
-
-type DetectedRequirement = {
-  nodeId: string;
-  nodeTitle: string;
-  class_type: string;
-  category: string;
-  fileName: string;
-  dbMatch: Model | null;
-  provenance_id: string | null;
-  vetting_status: VettingStatus;
+// UI format: LiteGraph v0.4 (ComfyUI regular "Save")
+type ComfyUINode = {
+  id: number;
+  type: string;
+  title?: string;
+  widgets_values: unknown[];
+  properties?: { 'Node name for S&R'?: string };
 };
+type ComfyUIGraph = {
+  nodes: ComfyUINode[];
+  definitions?: { subgraphs?: Array<{ nodes: ComfyUINode[] }> };
+  version: number;
+};
+
+type FieldDesc = { api: string; ui: number };
+
+/**
+ * Both export formats normalized to one shape so detection logic is written
+ * once. `set` writes through to the underlying node, so cloning the graph and
+ * re-normalizing is enough to produce a modified graph.
+ */
+type Node = {
+  id: string;
+  class_type: string;
+  title: string;
+  get: (f: FieldDesc) => unknown;
+  set: (f: FieldDesc, v: unknown) => void;
+  strings: () => { field: string; value: string }[];
+};
+
+function normalize(parsed: unknown): { nodes: Node[]; format: 'api' | 'ui' } {
+  const maybeUI = parsed as ComfyUIGraph;
+  if (Array.isArray(maybeUI?.nodes) && typeof maybeUI?.version === 'number') {
+    const raw = [
+      ...maybeUI.nodes,
+      ...(maybeUI.definitions?.subgraphs?.flatMap((sg) => sg.nodes) ?? []),
+    ];
+    return {
+      format: 'ui',
+      nodes: raw.map((n) => ({
+        id: String(n.id),
+        class_type: n.type,
+        title: n.title ?? n.properties?.['Node name for S&R'] ?? n.type,
+        get: (f) => n.widgets_values?.[f.ui],
+        set: (f, v) => {
+          if (!Array.isArray(n.widgets_values)) n.widgets_values = [];
+          n.widgets_values[f.ui] = v;
+        },
+        strings: () =>
+          (n.widgets_values ?? []).flatMap((v, i) =>
+            typeof v === 'string' ? [{ field: `widgets_values[${i}]`, value: v }] : []
+          ),
+      })),
+    };
+  }
+
+  const api = parsed as ComfyAPIGraph;
+  return {
+    format: 'api',
+    nodes: Object.entries(api).map(([id, n]) => ({
+      id,
+      class_type: n.class_type,
+      title: n._meta?.title ?? n.class_type,
+      get: (f) => n.inputs?.[f.api],
+      set: (f, v) => {
+        if (!n.inputs) n.inputs = {};
+        n.inputs[f.api] = v;
+      },
+      strings: () =>
+        Object.entries(n.inputs ?? {}).flatMap(([k, v]) =>
+          typeof v === 'string' ? [{ field: k, value: v }] : []
+        ),
+    })),
+  };
+}
+
+// ── Wizard state types ──────────────────────────────────────────────────────
+
+type ManualProvenance = {
+  download_url: string;
+  attribution: string;
+  attribution_url: string;
+  license: string;
+  data_provenance_notes: string;
+};
+
+const emptyProvenance: ManualProvenance = {
+  download_url: '',
+  attribution: '',
+  attribution_url: '',
+  license: '',
+  data_provenance_notes: '',
+};
+
+/** A model the nerd picked via PseudoVettedModelLoader — authoritative. */
+type DbModel = {
+  nodeId: string;
+  provenanceId: string;
+  nameLocal: string;
+  fileNameLocal: string;
+  categoryLocal: string;
+  dbMatch: ModelDetail | null;
+};
+
+/** A filename-shaped string found by scanning. Needs nerd confirmation. */
+type PossibleModel = {
+  key: string;
+  nodeId: string | null; // null = added by hand
+  nodeTitle: string;
+  fileName: string;
+  category: string;
+  selected: boolean;
+  provenance: ManualProvenance;
+};
+
+type VarType = 'int' | 'float' | 'string';
 
 type DetectedVariable = {
   nodeId: string;
   token: string;
   name: string;
   description: string;
-  type: string;
+  type: VarType;
   default: string;
   min: string;
   max: string;
   step: string;
+  is_basic: boolean;
 };
 
-type WorkflowAttribution = {
-  author: string;
-  author_url: string;
-  license: string;
+type DetectedSeed = {
+  nodeId: string;
+  title: string;
+  token: string;
 };
+
+type WorkflowAttribution = { author: string; author_url: string; license: string };
 
 type CapabilityFlags = {
   global_guidance_capabilities: {
@@ -55,113 +176,166 @@ type CapabilityFlags = {
     txt_negative: boolean;
     img_style: boolean;
   };
-  regional_guidance_capabilities: {
-    text: boolean;
-    image: boolean;
-  };
-  spatial_guidance_capabilities: {
-    depth: boolean;
-    edge: boolean;
-  };
+  regional_guidance_capabilities: { text: boolean; image: boolean };
+  spatial_guidance_capabilities: { depth: boolean; edge: boolean };
 };
 
-type WizardStep = 'upload' | 'requirements' | 'variables' | 'metadata' | 'preview';
+type WizardStep =
+  | 'upload'
+  | 'requirements'
+  | 'possible-models'
+  | 'variables'
+  | 'metadata'
+  | 'preview';
 
-// ── Helpers ─────────────────────────────────────────────────────────────────
+type Analysis = {
+  nodeCount: number;
+  dbModels: DbModel[];
+  possibleModels: PossibleModel[];
+  variables: DetectedVariable[];
+  seeds: DetectedSeed[];
+  snapshotCount: number;
+  usesPseudocomfy: boolean;
+};
 
-const PLACEHOLDER_TOKEN_RE = /__[A-Z_]+__/g;
+// ── Detection ───────────────────────────────────────────────────────────────
 
-function extractRequirements(graph: ComfyGraph): DetectedRequirement[] {
-  const results: DetectedRequirement[] = [];
-
-  for (const [nodeId, node] of Object.entries(graph)) {
-    const { class_type, inputs, _meta } = node;
-    const nodeTitle = _meta?.title ?? class_type;
-
-    // Check Kyle's vetted node types first (authoritative; no filename matching needed)
-    if (VETTED_NODE_CLASS_TYPES.includes(class_type)) {
-      const modelId = inputs['model_id'] as string | undefined;
-      results.push({
-        nodeId,
-        nodeTitle,
-        class_type,
-        category: 'checkpoints',
-        fileName: String(inputs['model_name'] ?? ''),
-        dbMatch: null,
-        provenance_id: modelId ?? null,
-        vetting_status: 'vetted',
-      });
-      continue;
-    }
-
-    // Generic loader fallback — filename-based matching
-    const category = GENERIC_LOADER_CLASS_TYPES[class_type];
-    if (!category) continue;
-
-    const fileNameKey = LOADER_FILENAME_INPUT[class_type] ?? 'model_name';
-    const fileName = inputs[fileNameKey];
-    if (typeof fileName !== 'string' || !fileName) continue;
-
-    results.push({
-      nodeId,
-      nodeTitle,
-      class_type,
-      category,
-      fileName,
-      dbMatch: null,
-      provenance_id: null,
-      vetting_status: 'unknown',
-    });
-  }
-
-  return results;
+function isVarType(v: string): v is VarType {
+  return v === 'int' || v === 'float' || v === 'string';
 }
 
-function extractVariables(graph: ComfyGraph): DetectedVariable[] {
-  const found: DetectedVariable[] = [];
+function analyze(parsed: unknown): Analysis {
+  const { nodes } = normalize(parsed);
+
+  const dbModels: DbModel[] = nodes
+    .filter((n) => n.class_type === PSEUDO_VETTED_MODEL_LOADER)
+    .map((n) => ({
+      nodeId: n.id,
+      provenanceId: String(n.get(VETTED_LOADER_FIELDS.id) ?? ''),
+      nameLocal: String(n.get(VETTED_LOADER_FIELDS.name_local) ?? ''),
+      fileNameLocal: String(n.get(VETTED_LOADER_FIELDS.filename_local) ?? ''),
+      categoryLocal: String(n.get(VETTED_LOADER_FIELDS.category_local) ?? ''),
+      dbMatch: null,
+    }));
+
+  // Filenames already accounted for by a vetted loader shouldn't reappear
+  // in the speculative scan.
+  const claimed = new Set(dbModels.map((m) => m.fileNameLocal.toLowerCase()).filter(Boolean));
+
+  const possibleModels: PossibleModel[] = [];
+  const seenFiles = new Set<string>();
+  for (const node of nodes) {
+    if (node.class_type === PSEUDO_VETTED_MODEL_LOADER) continue;
+    for (const { field, value } of node.strings()) {
+      const lower = value.toLowerCase();
+      if (!MODEL_FILE_EXTENSIONS.some((ext) => lower.endsWith(ext))) continue;
+      if (claimed.has(lower) || seenFiles.has(lower)) continue;
+      seenFiles.add(lower);
+      possibleModels.push({
+        key: `${node.id}:${field}`,
+        nodeId: node.id,
+        nodeTitle: node.title,
+        fileName: value,
+        category: 'checkpoints',
+        selected: false,
+        provenance: { ...emptyProvenance },
+      });
+    }
+  }
+
+  const variables: DetectedVariable[] = nodes
+    .filter((n) => n.class_type === PSEUDO_VARIABLE_NODE)
+    .map((n) => {
+      const name = String(n.get(VARIABLE_NODE_FIELDS.name) ?? '');
+      const rawType = String(n.get(VARIABLE_NODE_FIELDS.type) ?? 'float').toLowerCase();
+      const type: VarType = isVarType(rawType) ? rawType : 'float';
+      return {
+        nodeId: n.id,
+        token: tokenFromName(name),
+        name,
+        description: '',
+        type,
+        default: type === 'string' ? '' : '0',
+        min: '0',
+        max: '1',
+        step: type === 'int' ? '1' : '0.05',
+        is_basic: false,
+      };
+    });
+
+  const seeds: DetectedSeed[] = nodes
+    .filter((n) => n.class_type === PSEUDO_SEED_NODE)
+    .map((n, i) => ({ nodeId: n.id, title: n.title, token: seedTokenAt(i) }));
+
+  return {
+    nodeCount: nodes.length,
+    dbModels,
+    possibleModels,
+    variables,
+    seeds,
+    snapshotCount: nodes.filter((n) => n.class_type === PSEUDO_LOAD_MODEL_SNAPSHOT).length,
+    usesPseudocomfy: nodes.some((n) => n.class_type.startsWith(PSEUDO_CLASS_TYPE_PREFIX)),
+  };
+}
+
+/**
+ * Writes the reserved tokens into a copy of the graph. The token becomes the
+ * entire value of the node's own field; downstream links are untouched and
+ * carry the resolved value at render time.
+ */
+function buildWorkflowGraph(
+  rawGraph: unknown,
+  variables: DetectedVariable[],
+  seeds: DetectedSeed[]
+): unknown {
+  const clone = structuredClone(rawGraph);
+  const { nodes } = normalize(clone);
+
+  for (const node of nodes) {
+    if (node.class_type === PSEUDO_VARIABLE_NODE) {
+      const v = variables.find((x) => x.nodeId === node.id);
+      if (v) node.set(VARIABLE_NODE_FIELDS.value, v.token);
+    } else if (node.class_type === PSEUDO_SEED_NODE) {
+      const s = seeds.find((x) => x.nodeId === node.id);
+      if (s) node.set(SEED_NODE_FIELDS.value, s.token);
+    } else if (node.class_type === PSEUDO_LOAD_MODEL_SNAPSHOT) {
+      node.set(SNAPSHOT_NODE_FIELDS.path, TEMP_PATH_TOKEN);
+    }
+  }
+
+  return clone;
+}
+
+function validateVariables(vars: DetectedVariable[]): string[] {
+  const errors: string[] = [];
   const seen = new Set<string>();
 
-  for (const [nodeId, node] of Object.entries(graph)) {
-    for (const value of Object.values(node.inputs)) {
-      if (typeof value !== 'string') continue;
-      const tokens = value.match(PLACEHOLDER_TOKEN_RE);
-      if (!tokens) continue;
-      for (const token of tokens) {
-        if (seen.has(token)) continue;
-        seen.add(token);
-        const readableName = token
-          .replace(/^__|__$/g, '')
-          .toLowerCase()
-          .replace(/_/g, ' ');
-        found.push({
-          nodeId,
-          token,
-          name: readableName,
-          description: '',
-          type: 'float',
-          default: '0',
-          min: '0',
-          max: '1',
-          step: '0.01',
-        });
-      }
+  for (const v of vars) {
+    if (!v.name.trim()) {
+      errors.push(`A variable on node ${v.nodeId} has no name. Every variable needs one.`);
+      continue;
     }
+    if (seen.has(v.token)) {
+      errors.push(
+        `Two variables both resolve to ${v.token}. Give them distinct names.`
+      );
+    }
+    seen.add(v.token);
   }
 
-  return found;
+  return errors;
 }
 
-// ── Shared input styles ──────────────────────────────────────────────────────
+// ── Shared styles ───────────────────────────────────────────────────────────
 
 const inputClass =
   'block w-full border border-zinc-300 rounded-sm px-3 py-2 text-sm text-zinc-900 bg-white focus:outline-none focus:ring-1 focus:ring-zinc-400';
 const labelClass = 'block text-xs font-semibold uppercase tracking-wide text-zinc-400 mb-1';
 
-// ── Step progress indicator ──────────────────────────────────────────────────
-
 const STEPS: { key: WizardStep; label: string }[] = [
   { key: 'upload', label: 'Upload' },
-  { key: 'requirements', label: 'Requirements' },
+  { key: 'requirements', label: 'Models' },
+  { key: 'possible-models', label: 'Other Models' },
   { key: 'variables', label: 'Variables' },
   { key: 'metadata', label: 'Metadata' },
   { key: 'preview', label: 'Preview' },
@@ -183,23 +357,18 @@ function StepIndicator({ current }: { current: WizardStep }) {
                 : 'border-zinc-200 text-zinc-300'
             )}
           >
-            {i < currentIdx ? '✓' : i + 1}
+            {i + 1}
           </div>
           <span
             className={cn(
-              'ml-1.5 text-xs hidden sm:inline',
-              i <= currentIdx ? 'text-zinc-700' : 'text-zinc-300'
+              'ml-2 text-xs',
+              i === currentIdx ? 'text-zinc-900 font-medium' : 'text-zinc-400'
             )}
           >
             {step.label}
           </span>
           {i < STEPS.length - 1 && (
-            <div
-              className={cn(
-                'mx-2 h-px w-8',
-                i < currentIdx ? 'bg-zinc-900' : 'bg-zinc-200'
-              )}
-            />
+            <div className={cn('mx-2 h-px w-8', i < currentIdx ? 'bg-zinc-900' : 'bg-zinc-200')} />
           )}
         </div>
       ))}
@@ -207,18 +376,83 @@ function StepIndicator({ current }: { current: WizardStep }) {
   );
 }
 
-// ── Main Wizard ──────────────────────────────────────────────────────────────
+function ProvenanceFields({
+  value,
+  onChange,
+}: {
+  value: ManualProvenance;
+  onChange: (field: keyof ManualProvenance, v: string) => void;
+}) {
+  return (
+    <div className="grid md:grid-cols-2 gap-3">
+      <div>
+        <label className={labelClass}>Download URL</label>
+        <input
+          className={inputClass}
+          value={value.download_url}
+          onChange={(e) => onChange('download_url', e.target.value)}
+          placeholder="https://huggingface.co/…"
+        />
+      </div>
+      <div>
+        <label className={labelClass}>License</label>
+        <input
+          className={inputClass}
+          value={value.license}
+          onChange={(e) => onChange('license', e.target.value)}
+          placeholder="e.g. Apache 2.0"
+        />
+      </div>
+      <div>
+        <label className={labelClass}>Attribution</label>
+        <input
+          className={inputClass}
+          value={value.attribution}
+          onChange={(e) => onChange('attribution', e.target.value)}
+          placeholder="Creator or org"
+        />
+      </div>
+      <div>
+        <label className={labelClass}>Attribution URL</label>
+        <input
+          className={inputClass}
+          value={value.attribution_url}
+          onChange={(e) => onChange('attribution_url', e.target.value)}
+          placeholder="https://…"
+        />
+      </div>
+      <div className="md:col-span-2">
+        <label className={labelClass}>Data Provenance Notes</label>
+        <textarea
+          className={cn(inputClass, 'min-h-[60px] resize-y')}
+          value={value.data_provenance_notes}
+          onChange={(e) => onChange('data_provenance_notes', e.target.value)}
+          placeholder="Training data, known issues, lineage…"
+        />
+      </div>
+    </div>
+  );
+}
+
+// ── Main wizard ─────────────────────────────────────────────────────────────
 
 export default function WorkflowWizard() {
   const [step, setStep] = useState<WizardStep>('upload');
-  const [graph, setGraph] = useState<ComfyGraph | null>(null);
-  const [fileName, setFileName] = useState('');
+  const [rawGraph, setRawGraph] = useState<unknown>(null);
+  const [uploadedFileName, setUploadedFileName] = useState('');
   const [parseError, setParseError] = useState<string | null>(null);
-  const [requirements, setRequirements] = useState<DetectedRequirement[]>([]);
-  const [variables, setVariables] = useState<DetectedVariable[]>([]);
-  const [matchLoading, setMatchLoading] = useState(false);
+  const [blockingError, setBlockingError] = useState<string | null>(null);
+  const [uploadWarnings, setUploadWarnings] = useState<string[]>([]);
 
-  // Top-level metadata
+  const [nodeCount, setNodeCount] = useState(0);
+  const [dbModels, setDbModels] = useState<DbModel[]>([]);
+  const [possibleModels, setPossibleModels] = useState<PossibleModel[]>([]);
+  const [variables, setVariables] = useState<DetectedVariable[]>([]);
+  const [seeds, setSeeds] = useState<DetectedSeed[]>([]);
+  const [usesPseudocomfy, setUsesPseudocomfy] = useState(false);
+  const [matchLoading, setMatchLoading] = useState(false);
+  const [validationErrors, setValidationErrors] = useState<string[]>([]);
+
   const [workflowName, setWorkflowName] = useState('');
   const [description, setDescription] = useState('');
   const [thumbnailDataUri, setThumbnailDataUri] = useState('');
@@ -241,26 +475,58 @@ export default function WorkflowWizard() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const thumbInputRef = useRef<HTMLInputElement>(null);
   const [isDragging, setIsDragging] = useState(false);
+  const [workflowExpanded, setWorkflowExpanded] = useState(false);
 
-  // ── Step 1: Upload ───────────────────────────────────────────────────────
+  // ── Step 1: Upload ────────────────────────────────────────────────────────
 
   const processFile = useCallback(async (file: File) => {
     setParseError(null);
-    setFileName(file.name);
-    try {
-      const text = await file.text();
-      const parsed = JSON.parse(text);
+    setBlockingError(null);
+    setUploadWarnings([]);
+    setRawGraph(null);
+    setUploadedFileName(file.name);
 
-      // ComfyUI exports are a flat map of nodeId → node object
-      if (typeof parsed !== 'object' || Array.isArray(parsed)) {
-        throw new Error('Expected a ComfyUI workflow export (a JSON object of nodes).');
+    try {
+      const parsed = JSON.parse(await file.text());
+      if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+        throw new Error('Expected a ComfyUI workflow JSON file.');
       }
 
-      setGraph(parsed as ComfyGraph);
-      const detected = extractRequirements(parsed as ComfyGraph);
-      const vars = extractVariables(parsed as ComfyGraph);
-      setRequirements(detected);
-      setVariables(vars);
+      const a = analyze(parsed);
+
+      // A workflow can't render without a snapshot loader — hard stop.
+      if (a.snapshotCount === 0) {
+        setBlockingError(
+          `No ${PSEUDO_LOAD_MODEL_SNAPSHOT} node found. Every Pseudorandom workflow needs exactly one — it's what receives the scene data from Rhino at render time. Without it the workflow can't run. Add one in ComfyUI and re-upload.`
+        );
+        return;
+      }
+
+      const warnings: string[] = [];
+      if (a.snapshotCount > 1) {
+        warnings.push(
+          `Found ${a.snapshotCount} ${PSEUDO_LOAD_MODEL_SNAPSHOT} nodes, but there should be exactly one. Only one will receive scene data — remove the extras.`
+        );
+      }
+      if (a.variables.length === 0) {
+        warnings.push(
+          'No Variable nodes found. Nothing in this workflow will be adjustable from the Rhino plugin.'
+        );
+      }
+      if (a.seeds.length === 0) {
+        warnings.push(
+          'No Seed nodes found. The jock won’t be able to change the seed from the Rhino plugin.'
+        );
+      }
+
+      setRawGraph(parsed);
+      setNodeCount(a.nodeCount);
+      setDbModels(a.dbModels);
+      setPossibleModels(a.possibleModels);
+      setVariables(a.variables);
+      setSeeds(a.seeds);
+      setUsesPseudocomfy(a.usesPseudocomfy);
+      setUploadWarnings(warnings);
     } catch (e) {
       setParseError(e instanceof Error ? e.message : 'Failed to parse JSON.');
     }
@@ -285,37 +551,18 @@ export default function WorkflowWizard() {
   );
 
   const handleContinueFromUpload = async () => {
-    if (!graph) return;
-    // Match requirements against DB
+    if (!rawGraph) return;
     setMatchLoading(true);
     try {
-      const res = await fetch('/api/models');
-      const allModels: Model[] = res.ok ? await res.json() : [];
-
-      setRequirements((prev) =>
-        prev.map((req) => {
-          // Vetted node types already have provenance_id from the node itself
-          if (VETTED_NODE_CLASS_TYPES.includes(req.class_type)) {
-            const dbMatch = allModels.find((m) => m.id === req.provenance_id) ?? null;
-            return {
-              ...req,
-              dbMatch,
-              vetting_status: (dbMatch?.vetting_status_id ?? 'vetted') as VettingStatus,
-            };
-          }
-
-          // Generic loader — match by file_name
-          const dbMatch =
-            allModels.find(
-              (m) => m.file_name.toLowerCase() === req.fileName.toLowerCase()
-            ) ?? null;
-          return {
-            ...req,
-            dbMatch,
-            provenance_id: dbMatch?.id ?? null,
-            vetting_status: (dbMatch?.vetting_status_id ?? 'unknown') as VettingStatus,
-          };
-        })
+      const ids = [...new Set(dbModels.map((m) => m.provenanceId).filter(Boolean))];
+      const results = await Promise.all(
+        ids.map((id) => fetch(`/api/models/${id}`).then((r) => (r.ok ? r.json() : null)))
+      );
+      const byId = new Map<string, ModelDetail>(
+        (results.filter(Boolean) as ModelDetail[]).map((d) => [d.id, d])
+      );
+      setDbModels((prev) =>
+        prev.map((m) => ({ ...m, dbMatch: byId.get(m.provenanceId) ?? null }))
       );
     } finally {
       setMatchLoading(false);
@@ -323,17 +570,72 @@ export default function WorkflowWizard() {
     setStep('requirements');
   };
 
-  // ── Step 3: Variables ────────────────────────────────────────────────────
+  // ── Step 3: Possible models ───────────────────────────────────────────────
 
-  const updateVar = (idx: number, field: keyof DetectedVariable, value: string) => {
+  const updatePossible = <K extends keyof PossibleModel>(
+    key: string,
+    field: K,
+    value: PossibleModel[K]
+  ) => {
+    setPossibleModels((prev) =>
+      prev.map((p) => (p.key === key ? { ...p, [field]: value } : p))
+    );
+  };
+
+  const updatePossibleProvenance = (
+    key: string,
+    field: keyof ManualProvenance,
+    value: string
+  ) => {
+    setPossibleModels((prev) =>
+      prev.map((p) =>
+        p.key === key ? { ...p, provenance: { ...p.provenance, [field]: value } } : p
+      )
+    );
+  };
+
+  const addManualModel = () => {
+    setPossibleModels((prev) => [
+      ...prev,
+      {
+        key: `manual:${Date.now()}`,
+        nodeId: null,
+        nodeTitle: 'Added by hand',
+        fileName: '',
+        category: 'checkpoints',
+        selected: true,
+        provenance: { ...emptyProvenance },
+      },
+    ]);
+  };
+
+  // ── Step 4: Variables ─────────────────────────────────────────────────────
+
+  const updateVar = <K extends keyof DetectedVariable>(
+    idx: number,
+    field: K,
+    value: DetectedVariable[K]
+  ) => {
     setVariables((prev) => {
       const next = [...prev];
       next[idx] = { ...next[idx], [field]: value };
+      // Name drives the token — keep them in sync.
+      if (field === 'name') next[idx].token = tokenFromName(String(value));
       return next;
     });
   };
 
-  // ── Step 4: Metadata — thumbnail ────────────────────────────────────────
+  const handleContinueFromVariables = () => {
+    const errors = validateVariables(variables);
+    if (errors.length > 0) {
+      setValidationErrors(errors);
+      return;
+    }
+    setValidationErrors([]);
+    setStep('metadata');
+  };
+
+  // ── Step 5: Metadata ──────────────────────────────────────────────────────
 
   const handleThumbChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -343,10 +645,7 @@ export default function WorkflowWizard() {
     reader.readAsDataURL(file);
   };
 
-  const toggleCap = (
-    group: keyof CapabilityFlags,
-    key: string
-  ) => {
+  const toggleCap = (group: keyof CapabilityFlags, key: string) => {
     setCaps((prev) => ({
       ...prev,
       [group]: {
@@ -356,32 +655,74 @@ export default function WorkflowWizard() {
     }));
   };
 
-  // ── Step 5: Assemble output ──────────────────────────────────────────────
+  // ── Step 6: Assemble output ───────────────────────────────────────────────
 
   const buildOutput = () => {
-    const endpointRequirements = requirements.map((req) => {
-      const entry: Record<string, unknown> = {
-        category: req.category,
-        requirement: req.fileName,
-        vetting_status: req.vetting_status,
+    const fromManual = (p: ManualProvenance) => {
+      const out: Record<string, unknown> = {};
+      if (p.download_url) out.download_url = p.download_url;
+      if (p.attribution) out.attribution = p.attribution;
+      if (p.attribution_url) out.attribution_url = p.attribution_url;
+      if (p.license) out.license = p.license;
+      if (p.data_provenance_notes) out.data_provenance_notes = p.data_provenance_notes;
+      return out;
+    };
+
+    // Every requirement gets the same shape: the pointer when we have one, and
+    // a frozen copy of the provenance as the offline fallback.
+    const dbRequirements = dbModels.map((m) => {
+      const d = m.dbMatch;
+      const provenance: Record<string, unknown> = {};
+      if (d) {
+        if (d.download_url) provenance.download_url = d.download_url;
+        if (d.attribution) provenance.attribution = d.attribution;
+        if (d.attribution_url) provenance.attribution_url = d.attribution_url;
+        if (d.license) provenance.license = d.license;
+        if (d.data_provenance_notes) provenance.data_provenance_notes = d.data_provenance_notes;
+        if (d.size_bytes) provenance.size_bytes = d.size_bytes;
+      }
+      return {
+        category: (d?.category ?? m.categoryLocal).toLowerCase(),
+        requirement: d?.file_name ?? m.fileNameLocal,
+        provenance_id: m.provenanceId || null,
+        // The DB stores these Title Case; the workflow schema wants slugs.
+        vetting_status: (d?.vetting_status ?? 'unknown').toLowerCase(),
+        ...(Object.keys(provenance).length > 0 ? { provenance } : {}),
       };
-      if (req.provenance_id) entry.provenance_id = req.provenance_id;
-      return entry;
     });
 
-    const variablesDef = variables.map((v) => ({
-      name: v.name,
-      type: v.type,
-      description: v.description,
-      default: isNaN(Number(v.default)) ? v.default : Number(v.default),
-      binds_to: v.token,
-      min: isNaN(Number(v.min)) ? v.min : Number(v.min),
-      max: isNaN(Number(v.max)) ? v.max : Number(v.max),
-      step: isNaN(Number(v.step)) ? v.step : Number(v.step),
-    }));
+    const scannedRequirements = possibleModels
+      .filter((p) => p.selected && p.fileName.trim())
+      .map((p) => {
+        const provenance = fromManual(p.provenance);
+        return {
+          category: p.category,
+          requirement: p.fileName.trim(),
+          provenance_id: null,
+          vetting_status: 'unknown',
+          ...(Object.keys(provenance).length > 0 ? { provenance } : {}),
+        };
+      });
+
+    const variablesDef = variables.map((v) => {
+      const isNumeric = v.type === 'int' || v.type === 'float';
+      return {
+        name: v.name,
+        type: v.type,
+        description: v.description,
+        default: isNumeric ? (isNaN(Number(v.default)) ? 0 : Number(v.default)) : v.default,
+        binds_to: v.token,
+        is_basic: v.is_basic,
+        ...(isNumeric && {
+          min: isNaN(Number(v.min)) ? 0 : Number(v.min),
+          max: isNaN(Number(v.max)) ? 1 : Number(v.max),
+          step: isNaN(Number(v.step)) ? 0.01 : Number(v.step),
+        }),
+      };
+    });
 
     return {
-      pseudorandom_workflow_schema_version: '0.3',
+      pseudorandom_workflow_schema_version: 0.3,
       type: 'comfy',
       name: workflowName,
       description,
@@ -393,14 +734,25 @@ export default function WorkflowWizard() {
       },
       ...caps,
       variables: variablesDef,
-      endpoint_requirements: endpointRequirements,
-      workflow: graph,
+      endpoint_requirements: [
+        ...dbRequirements,
+        ...scannedRequirements,
+        ...(usesPseudocomfy ? [PSEUDOCOMFY_REQUIREMENT] : []),
+      ],
+      workflow: buildWorkflowGraph(rawGraph, variables, seeds),
     };
   };
 
   const downloadOutput = () => {
-    const output = buildOutput();
-    const blob = new Blob([JSON.stringify(output, null, 2)], { type: 'application/json' });
+    const errors = validateVariables(variables);
+    if (errors.length > 0) {
+      setValidationErrors(errors);
+      setStep('variables');
+      return;
+    }
+    const blob = new Blob([JSON.stringify(buildOutput(), null, 2)], {
+      type: 'application/json',
+    });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
@@ -409,7 +761,9 @@ export default function WorkflowWizard() {
     URL.revokeObjectURL(url);
   };
 
-  // ── Render ───────────────────────────────────────────────────────────────
+  const selectedCount = possibleModels.filter((p) => p.selected).length;
+
+  // ── Render ────────────────────────────────────────────────────────────────
 
   return (
     <div>
@@ -419,7 +773,10 @@ export default function WorkflowWizard() {
       {step === 'upload' && (
         <div className="space-y-6">
           <div
-            onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
+            onDragOver={(e) => {
+              e.preventDefault();
+              setIsDragging(true);
+            }}
             onDragLeave={() => setIsDragging(false)}
             onDrop={handleDrop}
             onClick={() => fileInputRef.current?.click()}
@@ -435,9 +792,9 @@ export default function WorkflowWizard() {
               className="hidden"
               onChange={handleFileChange}
             />
-            {fileName ? (
+            {uploadedFileName ? (
               <div>
-                <p className="font-medium text-zinc-900">{fileName}</p>
+                <p className="font-medium text-zinc-900">{uploadedFileName}</p>
                 <p className="text-xs text-zinc-400 mt-1">Click to replace</p>
               </div>
             ) : (
@@ -454,74 +811,112 @@ export default function WorkflowWizard() {
             </div>
           )}
 
-          {graph && (
+          {blockingError && (
+            <div className="border border-red-200 bg-red-50 rounded-sm px-4 py-3">
+              <p className="text-xs font-semibold text-red-700 mb-1">
+                This workflow can&apos;t be packaged
+              </p>
+              <p className="text-sm text-red-700">{blockingError}</p>
+            </div>
+          )}
+
+          {uploadWarnings.length > 0 && (
+            <div className="border border-amber-200 bg-amber-50 rounded-sm px-4 py-3">
+              <p className="text-xs font-semibold text-amber-800 mb-1">Worth a look</p>
+              <ul className="list-disc list-inside space-y-0.5">
+                {uploadWarnings.map((w, i) => (
+                  <li key={i} className="text-sm text-amber-800">
+                    {w}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {rawGraph !== null && (
             <div className="border border-zinc-200 rounded-sm px-4 py-3 text-sm text-zinc-600">
-              Parsed <strong>{Object.keys(graph).length}</strong> nodes.{' '}
-              Found <strong>{requirements.length}</strong> model requirement(s) and{' '}
-              <strong>{variables.length}</strong> placeholder variable(s).
+              Parsed <strong>{nodeCount}</strong> nodes. Found{' '}
+              <strong>{dbModels.length}</strong> database model(s),{' '}
+              <strong>{possibleModels.length}</strong> possible model file(s),{' '}
+              <strong>{variables.length}</strong> variable(s) and{' '}
+              <strong>{seeds.length}</strong> seed(s).
             </div>
           )}
 
           <div className="flex justify-end">
             <button
-              disabled={!graph || matchLoading}
+              disabled={rawGraph === null || matchLoading}
               onClick={handleContinueFromUpload}
               className="border border-zinc-300 rounded-sm px-6 py-2 text-sm font-medium text-zinc-900 bg-white hover:bg-zinc-50 disabled:opacity-40 transition-colors"
             >
-              {matchLoading ? 'Matching against database...' : 'Continue →'}
+              {matchLoading ? 'Looking up models…' : 'Continue →'}
             </button>
           </div>
         </div>
       )}
 
-      {/* ── Step 2: Requirements ──────────────────────────────────────── */}
+      {/* ── Step 2: Database models ────────────────────────────────────── */}
       {step === 'requirements' && (
         <div className="space-y-6">
           <div className="border border-zinc-200 rounded-sm p-5">
-            <div className="font-semibold text-xs uppercase tracking-wide text-zinc-500 mb-4">
-              Detected Model Requirements
+            <div className="font-semibold text-xs uppercase tracking-wide text-zinc-500 mb-1">
+              Models From The Database
             </div>
+            <p className="text-xs text-zinc-400 mb-4">
+              Picked in ComfyUI via {PSEUDO_VETTED_MODEL_LOADER}. Provenance comes from the
+              database record.
+            </p>
 
-            {requirements.length === 0 ? (
+            {dbModels.length === 0 ? (
               <p className="text-sm text-zinc-400">
-                No model-loading nodes detected. Click Continue to proceed.
+                No {PSEUDO_VETTED_MODEL_LOADER} nodes in this workflow. Any models it uses will
+                show up on the next step.
               </p>
             ) : (
-              <div className="space-y-6">
-                {requirements.map((req, idx) => (
-                  <div key={req.nodeId} className="border border-zinc-100 rounded-sm p-4">
-                    <div className="flex items-start justify-between gap-4 mb-4">
-                      <div>
-                        <p className="font-medium text-sm text-zinc-900">{req.fileName}</p>
-                        <p className="text-xs text-zinc-400">
-                          {req.nodeTitle} · {req.category}
-                        </p>
-                      </div>
-                      <span
-                        className={cn(
-                          'text-xs px-2 py-0.5 border rounded-sm shrink-0',
-                          req.dbMatch
-                            ? 'border-green-200 bg-green-50 text-green-700'
-                            : 'border-orange-200 bg-orange-50 text-orange-700'
-                        )}
-                      >
-                        {req.dbMatch ? '✓ Matched in database' : 'Not in database'}
-                      </span>
+              <div className="space-y-4">
+                {dbModels.map((m) => (
+                  <div key={m.nodeId} className="border border-zinc-100 rounded-sm p-4">
+                    <div className="mb-3">
+                      <p className="font-medium text-sm text-zinc-900">
+                        {m.dbMatch?.name ?? (m.nameLocal || m.fileNameLocal)}
+                      </p>
+                      <p className="text-xs text-zinc-400 font-mono">
+                        {m.dbMatch?.file_name ?? m.fileNameLocal}
+                      </p>
                     </div>
 
-                    {req.dbMatch ? (
+                    {m.dbMatch ? (
                       <div className="grid grid-cols-2 gap-x-6 gap-y-1 text-xs text-zinc-500">
-                        <span>License: <strong className="text-zinc-700">{req.dbMatch.license ?? '—'}</strong></span>
-                        <span>Status: <strong className="text-zinc-700">{req.dbMatch.vetting_status_id}</strong></span>
-                        <span className="col-span-2">Attribution: <strong className="text-zinc-700">{req.dbMatch.attribution ?? '—'}</strong></span>
+                        <span>
+                          Category:{' '}
+                          <strong className="text-zinc-700">{m.dbMatch.category}</strong>
+                        </span>
+                        <span>
+                          Status:{' '}
+                          <strong className="text-zinc-700">{m.dbMatch.vetting_status}</strong>
+                        </span>
+                        <span>
+                          License:{' '}
+                          <strong className="text-zinc-700">{m.dbMatch.license ?? '—'}</strong>
+                        </span>
+                        <span>
+                          Attribution:{' '}
+                          <strong className="text-zinc-700">{m.dbMatch.attribution ?? '—'}</strong>
+                        </span>
+                        <span className="col-span-2 font-mono text-zinc-400 text-[10px] mt-1">
+                          provenance_id: {m.dbMatch.id}
+                        </span>
                       </div>
                     ) : (
-                      <p className="text-xs text-orange-700">
-                        This model isn&apos;t in the database yet. Ask an internal user to add it via{' '}
-                        <a href="/models/new" target="_blank" className="underline">Add Model</a>{' '}
-                        before publishing this workflow. It will be included with{' '}
-                        <code className="font-mono">vetting_status: &quot;unknown&quot;</code> and no provenance_id.
-                      </p>
+                      <div className="border border-amber-200 bg-amber-50 rounded-sm px-3 py-2">
+                        <p className="text-xs text-amber-800">
+                          The node points at{' '}
+                          <code className="font-mono">{m.provenanceId || '(no id)'}</code>, but
+                          that record isn&apos;t in the database right now. The workflow will fall
+                          back to the node&apos;s local values:{' '}
+                          <strong>{m.fileNameLocal || '—'}</strong> ({m.categoryLocal || '—'}).
+                        </p>
+                      </div>
                     )}
                   </div>
                 ))}
@@ -530,72 +925,254 @@ export default function WorkflowWizard() {
           </div>
 
           <div className="flex justify-between">
-            <button onClick={() => setStep('upload')} className="border border-zinc-200 rounded-sm px-5 py-2 text-sm text-zinc-500 hover:bg-zinc-50">
+            <button
+              onClick={() => setStep('upload')}
+              className="border border-zinc-200 rounded-sm px-5 py-2 text-sm text-zinc-500 hover:bg-zinc-50"
+            >
               ← Back
             </button>
-            <button onClick={() => setStep('variables')} className="border border-zinc-300 rounded-sm px-6 py-2 text-sm font-medium text-zinc-900 bg-white hover:bg-zinc-50 transition-colors">
+            <button
+              onClick={() => setStep('possible-models')}
+              className="border border-zinc-300 rounded-sm px-6 py-2 text-sm font-medium text-zinc-900 bg-white hover:bg-zinc-50 transition-colors"
+            >
               Continue →
             </button>
           </div>
         </div>
       )}
 
-      {/* ── Step 3: Variables ─────────────────────────────────────────── */}
+      {/* ── Step 3: Possible models ────────────────────────────────────── */}
+      {step === 'possible-models' && (
+        <div className="space-y-6">
+          <div className="border border-zinc-200 rounded-sm p-5">
+            <div className="flex items-start justify-between gap-4 mb-1">
+              <div className="font-semibold text-xs uppercase tracking-wide text-zinc-500">
+                Other Possible Models
+              </div>
+              <button
+                onClick={addManualModel}
+                className="text-xs border border-zinc-200 rounded-sm px-3 py-1 text-zinc-600 hover:border-zinc-400 transition-colors shrink-0"
+              >
+                + Add a model by hand
+              </button>
+            </div>
+            <p className="text-xs text-zinc-400 mb-4">
+              Found by scanning every node for filename-shaped strings, so this list is a guess —
+              tick the ones that are really model requirements. If something is missing, add it by
+              hand.
+            </p>
+
+            {possibleModels.length === 0 ? (
+              <p className="text-sm text-zinc-400">
+                No model-shaped filenames found. If this workflow needs a model that isn&apos;t
+                already listed, add it by hand.
+              </p>
+            ) : (
+              <div className="space-y-4">
+                {possibleModels.map((p) => (
+                  <div
+                    key={p.key}
+                    className={cn(
+                      'border rounded-sm p-4 transition-colors',
+                      p.selected ? 'border-zinc-300 bg-white' : 'border-zinc-100 bg-zinc-50/50'
+                    )}
+                  >
+                    <div className="flex items-start gap-3">
+                      <input
+                        type="checkbox"
+                        checked={p.selected}
+                        onChange={(e) => updatePossible(p.key, 'selected', e.target.checked)}
+                        className="mt-1 shrink-0"
+                        id={`sel_${p.key}`}
+                      />
+                      <div className="flex-1 min-w-0">
+                        {p.nodeId === null ? (
+                          <input
+                            className={inputClass}
+                            value={p.fileName}
+                            onChange={(e) => updatePossible(p.key, 'fileName', e.target.value)}
+                            placeholder="filename.safetensors"
+                          />
+                        ) : (
+                          <label htmlFor={`sel_${p.key}`} className="cursor-pointer block">
+                            <p className="font-mono text-sm text-zinc-900 break-all">
+                              {p.fileName}
+                            </p>
+                            <p className="text-xs text-zinc-400">{p.nodeTitle}</p>
+                          </label>
+                        )}
+                      </div>
+                    </div>
+
+                    {p.selected && (
+                      <div className="mt-4 pl-6 space-y-3">
+                        <div className="max-w-xs">
+                          <label className={labelClass}>Category</label>
+                          <select
+                            className={inputClass}
+                            value={p.category}
+                            onChange={(e) => updatePossible(p.key, 'category', e.target.value)}
+                          >
+                            {COMFY_MODEL_FOLDERS.map((f) => (
+                              <option key={f} value={f}>
+                                {f}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                        <p className="text-xs text-zinc-400">
+                          Provenance — fill in whatever you know. All fields optional.
+                        </p>
+                        <ProvenanceFields
+                          value={p.provenance}
+                          onChange={(field, v) => updatePossibleProvenance(p.key, field, v)}
+                        />
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div className="flex justify-between">
+            <button
+              onClick={() => setStep('requirements')}
+              className="border border-zinc-200 rounded-sm px-5 py-2 text-sm text-zinc-500 hover:bg-zinc-50"
+            >
+              ← Back
+            </button>
+            <button
+              onClick={() => setStep('variables')}
+              className="border border-zinc-300 rounded-sm px-6 py-2 text-sm font-medium text-zinc-900 bg-white hover:bg-zinc-50 transition-colors"
+            >
+              Continue with {selectedCount} selected →
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* ── Step 4: Variables ──────────────────────────────────────────── */}
       {step === 'variables' && (
         <div className="space-y-6">
           <div className="border border-zinc-200 rounded-sm p-5">
             <div className="font-semibold text-xs uppercase tracking-wide text-zinc-500 mb-4">
-              Detected Placeholder Variables
+              Variables
             </div>
+
+            {validationErrors.length > 0 && (
+              <div className="border border-red-200 bg-red-50 rounded-sm p-3 mb-4">
+                <p className="text-xs font-semibold text-red-700 mb-1">
+                  Fix these before continuing:
+                </p>
+                <ul className="list-disc list-inside space-y-0.5">
+                  {validationErrors.map((e, i) => (
+                    <li key={i} className="text-xs text-red-700">
+                      {e}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
 
             {variables.length === 0 ? (
               <p className="text-sm text-zinc-400">
-                No placeholder tokens (like <code className="font-mono text-xs">__ITERATION__</code>) detected. Click Continue to proceed.
+                No Variable nodes in this workflow, so nothing will be adjustable from the plugin.
+                Add {PSEUDO_VARIABLE_NODE} nodes in ComfyUI and re-upload if that&apos;s not what
+                you want.
               </p>
             ) : (
               <div className="space-y-6">
                 {variables.map((v, idx) => (
-                  <div key={v.token} className="border border-zinc-100 rounded-sm p-4">
+                  <div key={v.nodeId} className="border border-zinc-100 rounded-sm p-4">
                     <div className="flex items-center gap-2 mb-4">
                       <code className="font-mono text-xs bg-zinc-100 px-2 py-0.5 rounded">
-                        {v.token}
+                        {v.token || '(needs a name)'}
                       </code>
-                      <span className="text-xs text-zinc-400">detected in node {v.nodeId}</span>
+                      <span className="text-xs text-zinc-400">from node {v.nodeId}</span>
                     </div>
 
                     <div className="grid md:grid-cols-2 gap-4">
                       <div>
                         <label className={labelClass}>Variable Name</label>
-                        <input className={inputClass} value={v.name} onChange={(e) => updateVar(idx, 'name', e.target.value)} placeholder="e.g. iteration count" />
+                        <input
+                          className={inputClass}
+                          value={v.name}
+                          onChange={(e) => updateVar(idx, 'name', e.target.value)}
+                          placeholder="e.g. Adherence"
+                        />
                       </div>
                       <div>
                         <label className={labelClass}>Type</label>
-                        <select className={inputClass} value={v.type} onChange={(e) => updateVar(idx, 'type', e.target.value)}>
+                        <select
+                          className={inputClass}
+                          value={v.type}
+                          onChange={(e) => updateVar(idx, 'type', e.target.value as VarType)}
+                        >
                           <option value="float">float</option>
                           <option value="int">int</option>
                           <option value="string">string</option>
-                          <option value="boolean">boolean</option>
                         </select>
                       </div>
                       <div className="md:col-span-2">
                         <label className={labelClass}>Description</label>
-                        <input className={inputClass} value={v.description} onChange={(e) => updateVar(idx, 'description', e.target.value)} placeholder="User-facing description shown in the plugin" />
+                        <input
+                          className={inputClass}
+                          value={v.description}
+                          onChange={(e) => updateVar(idx, 'description', e.target.value)}
+                          placeholder="Shown to the user in the Rhino plugin"
+                        />
                       </div>
                       <div>
                         <label className={labelClass}>Default</label>
-                        <input className={inputClass} value={v.default} onChange={(e) => updateVar(idx, 'default', e.target.value)} />
+                        <input
+                          className={inputClass}
+                          value={v.default}
+                          onChange={(e) => updateVar(idx, 'default', e.target.value)}
+                        />
                       </div>
-                      <div>
-                        <label className={labelClass}>Step</label>
-                        <input className={inputClass} value={v.step} onChange={(e) => updateVar(idx, 'step', e.target.value)} />
-                      </div>
-                      <div>
-                        <label className={labelClass}>Min</label>
-                        <input className={inputClass} value={v.min} onChange={(e) => updateVar(idx, 'min', e.target.value)} />
-                      </div>
-                      <div>
-                        <label className={labelClass}>Max</label>
-                        <input className={inputClass} value={v.max} onChange={(e) => updateVar(idx, 'max', e.target.value)} />
+                      {(v.type === 'int' || v.type === 'float') && (
+                        <>
+                          <div>
+                            <label className={labelClass}>Step</label>
+                            <input
+                              className={inputClass}
+                              value={v.step}
+                              onChange={(e) => updateVar(idx, 'step', e.target.value)}
+                            />
+                          </div>
+                          <div>
+                            <label className={labelClass}>Min</label>
+                            <input
+                              className={inputClass}
+                              value={v.min}
+                              onChange={(e) => updateVar(idx, 'min', e.target.value)}
+                            />
+                          </div>
+                          <div>
+                            <label className={labelClass}>Max</label>
+                            <input
+                              className={inputClass}
+                              value={v.max}
+                              onChange={(e) => updateVar(idx, 'max', e.target.value)}
+                            />
+                          </div>
+                        </>
+                      )}
+                      <div className="md:col-span-2 flex items-center gap-2 pt-1">
+                        <input
+                          type="checkbox"
+                          id={`is_basic_${idx}`}
+                          checked={v.is_basic}
+                          onChange={() => updateVar(idx, 'is_basic', !v.is_basic)}
+                          className="rounded"
+                        />
+                        <label
+                          htmlFor={`is_basic_${idx}`}
+                          className="text-xs text-zinc-600 cursor-pointer"
+                        >
+                          Basic variable — show prominently in the Rhino plugin UI
+                        </label>
                       </div>
                     </div>
                   </div>
@@ -604,50 +1181,109 @@ export default function WorkflowWizard() {
             )}
           </div>
 
+          {/* Seeds are detected and tokenized, but aren't user-configurable and
+              don't appear in the output's variables[] list. */}
+          <div className="border border-zinc-200 rounded-sm p-5">
+            <div className="font-semibold text-xs uppercase tracking-wide text-zinc-500 mb-1">
+              Seeds
+            </div>
+            <p className="text-xs text-zinc-400 mb-4">
+              Handled automatically — the plugin drives these. They aren&apos;t listed as
+              variables in the output.
+            </p>
+            {seeds.length === 0 ? (
+              <p className="text-sm text-zinc-400">No Seed nodes in this workflow.</p>
+            ) : (
+              <div className="space-y-2">
+                {seeds.map((s) => (
+                  <div key={s.nodeId} className="flex items-center gap-2 text-sm">
+                    <code className="font-mono text-xs bg-zinc-100 px-2 py-0.5 rounded">
+                      {s.token}
+                    </code>
+                    <span className="text-xs text-zinc-400">
+                      {s.title} · node {s.nodeId}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
           <div className="flex justify-between">
-            <button onClick={() => setStep('requirements')} className="border border-zinc-200 rounded-sm px-5 py-2 text-sm text-zinc-500 hover:bg-zinc-50">
+            <button
+              onClick={() => setStep('possible-models')}
+              className="border border-zinc-200 rounded-sm px-5 py-2 text-sm text-zinc-500 hover:bg-zinc-50"
+            >
               ← Back
             </button>
-            <button onClick={() => setStep('metadata')} className="border border-zinc-300 rounded-sm px-6 py-2 text-sm font-medium text-zinc-900 bg-white hover:bg-zinc-50 transition-colors">
+            <button
+              onClick={handleContinueFromVariables}
+              className="border border-zinc-300 rounded-sm px-6 py-2 text-sm font-medium text-zinc-900 bg-white hover:bg-zinc-50 transition-colors"
+            >
               Continue →
             </button>
           </div>
         </div>
       )}
 
-      {/* ── Step 4: Metadata ──────────────────────────────────────────── */}
+      {/* ── Step 5: Metadata ───────────────────────────────────────────── */}
       {step === 'metadata' && (
         <div className="space-y-6">
-          {/* Basic info */}
           <div className="border border-zinc-200 rounded-sm p-5 space-y-5">
             <div className="font-semibold text-xs uppercase tracking-wide text-zinc-500">
               Workflow Info
             </div>
             <div>
               <label className={labelClass}>Workflow Name *</label>
-              <input className={inputClass} value={workflowName} onChange={(e) => setWorkflowName(e.target.value)} placeholder="e.g. Juggernaut Essential" required />
+              <input
+                className={inputClass}
+                value={workflowName}
+                onChange={(e) => setWorkflowName(e.target.value)}
+                placeholder="e.g. Juggernaut Essential"
+                required
+              />
             </div>
             <div>
               <label className={labelClass}>Description</label>
-              <textarea className={cn(inputClass, 'min-h-[80px] resize-y')} value={description} onChange={(e) => setDescription(e.target.value)} placeholder="What does this workflow do? What is it good for?" />
+              <textarea
+                className={cn(inputClass, 'min-h-[80px] resize-y')}
+                value={description}
+                onChange={(e) => setDescription(e.target.value)}
+                placeholder="What does this workflow do? What is it good for?"
+              />
             </div>
             <div>
               <label className={labelClass}>Thumbnail</label>
-              <input ref={thumbInputRef} type="file" accept="image/*" className="hidden" onChange={handleThumbChange} />
+              <input
+                ref={thumbInputRef}
+                type="file"
+                accept="image/*"
+                className="hidden"
+                onChange={handleThumbChange}
+              />
               <div className="flex items-center gap-4">
                 {thumbnailDataUri && (
                   // eslint-disable-next-line @next/next/no-img-element
-                  <img src={thumbnailDataUri} alt="Thumbnail preview" className="w-20 h-20 object-cover rounded-sm border border-zinc-200" />
+                  <img
+                    src={thumbnailDataUri}
+                    alt="Thumbnail preview"
+                    className="w-20 h-20 object-cover rounded-sm border border-zinc-200"
+                  />
                 )}
-                <button type="button" onClick={() => thumbInputRef.current?.click()} className="text-sm border border-zinc-200 rounded-sm px-3 py-1.5 text-zinc-600 hover:border-zinc-400 transition-colors">
+                <button
+                  type="button"
+                  onClick={() => thumbInputRef.current?.click()}
+                  className="text-sm border border-zinc-200 rounded-sm px-3 py-1.5 text-zinc-600 hover:border-zinc-400 transition-colors"
+                >
                   {thumbnailDataUri ? 'Replace image' : 'Upload image'}
                 </button>
               </div>
-              <p className="text-xs text-zinc-400 mt-1">Will be embedded as a base64 data URI in the output file.</p>
+              <p className="text-xs text-zinc-400 mt-1">
+                Will be embedded as a base64 data URI in the output file.
+              </p>
             </div>
           </div>
 
-          {/* Attribution */}
           <div className="border border-zinc-200 rounded-sm p-5 space-y-4">
             <div className="font-semibold text-xs uppercase tracking-wide text-zinc-500">
               Workflow Attribution
@@ -655,20 +1291,32 @@ export default function WorkflowWizard() {
             <div className="grid md:grid-cols-2 gap-4">
               <div>
                 <label className={labelClass}>Author</label>
-                <input className={inputClass} value={attribution.author} onChange={(e) => setAttribution((a) => ({ ...a, author: e.target.value }))} />
+                <input
+                  className={inputClass}
+                  value={attribution.author}
+                  onChange={(e) => setAttribution((a) => ({ ...a, author: e.target.value }))}
+                />
               </div>
               <div>
                 <label className={labelClass}>Author URL</label>
-                <input className={inputClass} type="url" value={attribution.author_url} onChange={(e) => setAttribution((a) => ({ ...a, author_url: e.target.value }))} />
+                <input
+                  className={inputClass}
+                  type="url"
+                  value={attribution.author_url}
+                  onChange={(e) => setAttribution((a) => ({ ...a, author_url: e.target.value }))}
+                />
               </div>
               <div>
                 <label className={labelClass}>License</label>
-                <input className={inputClass} value={attribution.license} onChange={(e) => setAttribution((a) => ({ ...a, license: e.target.value }))} />
+                <input
+                  className={inputClass}
+                  value={attribution.license}
+                  onChange={(e) => setAttribution((a) => ({ ...a, license: e.target.value }))}
+                />
               </div>
             </div>
           </div>
 
-          {/* Capability flags */}
           <div className="border border-zinc-200 rounded-sm p-5 space-y-4">
             <div className="font-semibold text-xs uppercase tracking-wide text-zinc-500">
               Capability Flags
@@ -678,7 +1326,10 @@ export default function WorkflowWizard() {
               <p className={labelClass}>Global Guidance</p>
               <div className="flex flex-wrap gap-3">
                 {Object.keys(caps.global_guidance_capabilities).map((key) => (
-                  <label key={key} className="flex items-center gap-1.5 text-sm text-zinc-700 cursor-pointer">
+                  <label
+                    key={key}
+                    className="flex items-center gap-1.5 text-sm text-zinc-700 cursor-pointer"
+                  >
                     <input
                       type="checkbox"
                       checked={(caps.global_guidance_capabilities as Record<string, boolean>)[key]}
@@ -694,10 +1345,15 @@ export default function WorkflowWizard() {
               <p className={labelClass}>Regional Guidance</p>
               <div className="flex flex-wrap gap-3">
                 {Object.keys(caps.regional_guidance_capabilities).map((key) => (
-                  <label key={key} className="flex items-center gap-1.5 text-sm text-zinc-700 cursor-pointer">
+                  <label
+                    key={key}
+                    className="flex items-center gap-1.5 text-sm text-zinc-700 cursor-pointer"
+                  >
                     <input
                       type="checkbox"
-                      checked={(caps.regional_guidance_capabilities as Record<string, boolean>)[key]}
+                      checked={
+                        (caps.regional_guidance_capabilities as Record<string, boolean>)[key]
+                      }
                       onChange={() => toggleCap('regional_guidance_capabilities', key)}
                     />
                     {key}
@@ -710,7 +1366,10 @@ export default function WorkflowWizard() {
               <p className={labelClass}>Spatial Guidance</p>
               <div className="flex flex-wrap gap-3">
                 {Object.keys(caps.spatial_guidance_capabilities).map((key) => (
-                  <label key={key} className="flex items-center gap-1.5 text-sm text-zinc-700 cursor-pointer">
+                  <label
+                    key={key}
+                    className="flex items-center gap-1.5 text-sm text-zinc-700 cursor-pointer"
+                  >
                     <input
                       type="checkbox"
                       checked={(caps.spatial_guidance_capabilities as Record<string, boolean>)[key]}
@@ -724,7 +1383,10 @@ export default function WorkflowWizard() {
           </div>
 
           <div className="flex justify-between">
-            <button onClick={() => setStep('variables')} className="border border-zinc-200 rounded-sm px-5 py-2 text-sm text-zinc-500 hover:bg-zinc-50">
+            <button
+              onClick={() => setStep('variables')}
+              className="border border-zinc-200 rounded-sm px-5 py-2 text-sm text-zinc-500 hover:bg-zinc-50"
+            >
               ← Back
             </button>
             <button
@@ -738,39 +1400,60 @@ export default function WorkflowWizard() {
         </div>
       )}
 
-      {/* ── Step 5: Preview & Download ───────────────────────────────── */}
+      {/* ── Step 6: Preview & Download ─────────────────────────────────── */}
       {step === 'preview' && (
         <div className="space-y-6">
-          <div className="border border-zinc-200 rounded-sm p-5">
-            <div className="flex items-center justify-between mb-4">
-              <div className="font-semibold text-xs uppercase tracking-wide text-zinc-500">
-                Output Preview
+          {(() => {
+            const out = buildOutput();
+            const { workflow: workflowGraph, ...meta } = out as Record<string, unknown> & {
+              workflow: unknown;
+            };
+            return (
+              <div className="border border-zinc-200 rounded-sm p-5">
+                <div className="flex items-center justify-between mb-4">
+                  <div className="font-semibold text-xs uppercase tracking-wide text-zinc-500">
+                    Output Preview
+                  </div>
+                  <button
+                    onClick={downloadOutput}
+                    className="border border-zinc-300 rounded-sm px-4 py-1.5 text-sm font-medium text-zinc-900 bg-white hover:bg-zinc-50 transition-colors"
+                  >
+                    Download .pseudorandom.json
+                  </button>
+                </div>
+                <pre className="text-xs text-zinc-600 bg-zinc-50 border border-zinc-100 rounded-sm p-4 overflow-auto max-h-[500px] whitespace-pre-wrap break-all">
+                  {JSON.stringify(meta, null, 2)}
+                </pre>
+                <div className="mt-3 border border-zinc-100 rounded-sm overflow-hidden">
+                  <button
+                    onClick={() => setWorkflowExpanded((v) => !v)}
+                    className="w-full flex items-center justify-between px-4 py-2.5 text-xs font-semibold uppercase tracking-wide text-zinc-500 bg-zinc-50 hover:bg-zinc-100 transition-colors"
+                  >
+                    <span>workflow graph (tokens inserted)</span>
+                    <span>{workflowExpanded ? '▲ hide' : '▼ show'}</span>
+                  </button>
+                  {workflowExpanded && (
+                    <pre className="text-xs text-zinc-600 p-4 overflow-auto max-h-[400px] whitespace-pre-wrap break-all border-t border-zinc-100">
+                      {JSON.stringify(workflowGraph, null, 2)}
+                    </pre>
+                  )}
+                </div>
               </div>
-              <button
-                onClick={downloadOutput}
-                className="border border-zinc-300 rounded-sm px-4 py-1.5 text-sm font-medium text-zinc-900 bg-white hover:bg-zinc-50 transition-colors"
-              >
-                Download .pseudorandom.json
-              </button>
-            </div>
-            <pre className="text-xs text-zinc-600 bg-zinc-50 border border-zinc-100 rounded-sm p-4 overflow-auto max-h-[500px] whitespace-pre-wrap break-all">
-              {JSON.stringify(
-                { ...buildOutput(), workflow: '(workflow graph omitted from preview)' },
-                null,
-                2
-              )}
-            </pre>
-          </div>
+            );
+          })()}
 
           <div className="flex justify-between">
-            <button onClick={() => setStep('metadata')} className="border border-zinc-200 rounded-sm px-5 py-2 text-sm text-zinc-500 hover:bg-zinc-50">
+            <button
+              onClick={() => setStep('metadata')}
+              className="border border-zinc-200 rounded-sm px-5 py-2 text-sm text-zinc-500 hover:bg-zinc-50"
+            >
               ← Back
             </button>
             <button
               onClick={downloadOutput}
               className="border border-zinc-900 bg-zinc-900 text-white rounded-sm px-6 py-2 text-sm font-medium hover:bg-zinc-800 transition-colors"
             >
-              Download Workflow
+              Download .pseudorandom.json
             </button>
           </div>
         </div>

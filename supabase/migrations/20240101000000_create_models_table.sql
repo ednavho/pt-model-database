@@ -1,44 +1,69 @@
 -- Migration: create_models_table
--- Creates the pseudorandom_provenance.models table for the model provenance system.
--- Uses a dedicated schema to avoid colliding with existing tables used by
--- the Dispatcher and PT Accounts apps that share this Supabase instance.
+-- Sets up the full model provenance schema: lookup tables, models, model_submissions.
+--
+-- NOTE: Tables are in the public schema (default Supabase API schema).
+-- The original migration created a pseudorandom_provenance schema, but app code
+-- accesses tables via supabase.from('models') without a schema prefix, so public
+-- is what the client actually queries.
+--
+-- Auth is enforced at the application layer (INTERNAL_EMAILS allow-list in
+-- config/auth.ts), not via RLS. RLS is enabled with permissive policies to
+-- match current behavior. Tighten before production hardening.
 
-create schema if not exists pseudorandom_provenance;
+-- ── Lookup tables ──────────────────────────────────────────────────────────────
 
--- Vetting status values: vetted (green), potentially_problematic (orange), unknown (red)
-create type pseudorandom_provenance.vetting_status_enum as enum (
-  'vetted',
-  'potentially_problematic',
-  'unknown'
+create table if not exists model_categories (
+  id   text primary key,  -- slug: 'checkpoints', 'controlnet', 'loras', etc.
+  name text not null      -- same as id; present for PostgREST join queries
 );
 
-create table pseudorandom_provenance.models (
-  id                     uuid primary key default gen_random_uuid(),
-  category               text not null,
-  name                   text,
-  -- Exact filename ComfyUI expects (e.g. "Juggernaut_X_RunDiffusion_Hyper.safetensors").
-  -- This is what workflow JSON requirement fields match against.
-  file_name              text not null,
-  download_url           text,
-  attribution            text,
-  attribution_url        text,
-  license                text,
-  data_provenance_notes  text,
-  size_bytes             bigint,
-  -- vetted=green, potentially_problematic=orange, unknown=red
-  vetting_status         pseudorandom_provenance.vetting_status_enum not null default 'unknown',
-  -- Names/IDs of known essential workflows referencing this model.
-  used_by_workflows      text[],
-  created_at             timestamptz not null default now(),
-  updated_at             timestamptz not null default now()
+insert into model_categories (id, name) values
+  ('checkpoints', 'checkpoints'),
+  ('controlnet',  'controlnet'),
+  ('loras',       'loras'),
+  ('clip_vision', 'clip_vision'),
+  ('ipadapter',   'ipadapter')
+on conflict (id) do nothing;
+
+create table if not exists vetting_statuses (
+  id   text primary key,  -- slug: 'vetted', 'potentially_problematic', 'unknown'
+  name text not null
 );
 
--- Index for the most common query: filtering by category (used by GET /api/models?category=)
-create index models_category_idx on pseudorandom_provenance.models (category);
-create index models_file_name_idx on pseudorandom_provenance.models (file_name);
+insert into vetting_statuses (id, name) values
+  ('vetted',                 'vetted'),
+  ('potentially_problematic','potentially_problematic'),
+  ('unknown',                'unknown')
+on conflict (id) do nothing;
 
--- Auto-update updated_at on any row change
-create or replace function pseudorandom_provenance.set_updated_at()
+-- ── models ─────────────────────────────────────────────────────────────────────
+
+create table if not exists models (
+  id                    uuid        primary key default gen_random_uuid(),
+  category_id           text        not null references model_categories(id),
+  name                  text,
+  -- Exact filename ComfyUI expects (e.g. "v1-5-pruned.safetensors").
+  -- Matched against node widgets_values[0] by the Package Workflow wizard
+  -- and against the model_id input by Kyle's VettedModelLoader node.
+  file_name             text        not null unique,
+  download_url          text,
+  attribution           text,
+  attribution_url       text,
+  license               text,
+  data_provenance_notes text,
+  size_bytes            bigint,
+  vetting_status_id     text        not null references vetting_statuses(id) default 'unknown',
+  -- UUIDs of pseudorandom workflows that reference this model via provenance_id.
+  used_by_workflows     text[],
+  created_at            timestamptz not null default now(),
+  updated_at            timestamptz not null default now()
+);
+
+create index if not exists models_category_id_idx       on models(category_id);
+create index if not exists models_vetting_status_id_idx on models(vetting_status_id);
+create index if not exists models_file_name_idx         on models(file_name);
+
+create or replace function set_updated_at()
 returns trigger as $$
 begin
   new.updated_at = now();
@@ -47,21 +72,40 @@ end;
 $$ language plpgsql;
 
 create trigger models_updated_at
-  before update on pseudorandom_provenance.models
-  for each row execute function pseudorandom_provenance.set_updated_at();
+  before update on models
+  for each row execute function set_updated_at();
 
--- Row Level Security (open for now; add policies when auth is wired)
-alter table pseudorandom_provenance.models enable row level security;
+alter table models enable row level security;
+-- Public read; writes are auth-gated in API routes (isInternalUser check).
+create policy "public select"   on models for select using (true);
+create policy "public insert"   on models for insert with check (true);
+create policy "public update"   on models for update using (true);
+create policy "public delete"   on models for delete using (true);
 
--- Temporary open policies — replace with real policies when auth is added
-create policy "allow_all_select" on pseudorandom_provenance.models
-  for select using (true);
+-- ── model_submissions ──────────────────────────────────────────────────────────
 
-create policy "allow_all_insert" on pseudorandom_provenance.models
-  for insert with check (true);
+-- Holds models submitted for review via /submit-model.
+-- On approval, records are manually promoted to the models table.
+create table if not exists model_submissions (
+  id                    uuid        primary key default gen_random_uuid(),
+  -- Required
+  name                  text        not null,
+  source_url            text        not null,
+  submitted_by_name     text        not null,
+  submitted_by_email    text        not null,
+  -- Optional
+  file_name             text,
+  category_id           text        references model_categories(id),
+  license               text,
+  attribution           text,
+  attribution_url       text,
+  data_provenance_notes text,
+  reason                text,       -- why the submitter wants it added
+  -- No vetting_status — assigned only when promoted to models table
+  created_at            timestamptz not null default now()
+);
 
-create policy "allow_all_update" on pseudorandom_provenance.models
-  for update using (true);
-
-create policy "allow_all_delete" on pseudorandom_provenance.models
-  for delete using (true);
+alter table model_submissions enable row level security;
+-- Anyone can submit; only internal users should read (enforced in app layer).
+create policy "public insert"   on model_submissions for insert with check (true);
+create policy "public select"   on model_submissions for select using (true);
