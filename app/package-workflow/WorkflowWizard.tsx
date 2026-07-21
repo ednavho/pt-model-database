@@ -19,6 +19,7 @@ import {
   tokenFromName,
   type VarType,
 } from '@/config/pseudoNodeTypes';
+import JsonTree from '@/components/ui/JsonTree';
 import { ModelDetail } from '@/types/database';
 import { cn } from '@/utils/cn';
 import { useCallback, useRef, useState } from 'react';
@@ -345,6 +346,97 @@ const inputClass =
   'block w-full border border-zinc-300 rounded-sm px-3 py-2 text-sm text-zinc-900 bg-white focus:outline-none focus:ring-1 focus:ring-zinc-400';
 const labelClass = 'block text-xs font-semibold uppercase tracking-wide text-zinc-400 mb-1';
 
+/**
+ * Hover/focus hint explaining a field. Focusable so it's reachable by
+ * keyboard, and labelled so screen readers get the text without the tooltip
+ * ever being shown.
+ */
+function InfoTip({ text }: { text: string }) {
+  return (
+    <span className="group relative inline-flex">
+      <button
+        type="button"
+        aria-label={text}
+        onClick={(e) => e.preventDefault()}
+        className="text-zinc-300 hover:text-zinc-500 focus:text-zinc-500 focus:outline-none"
+      >
+        <svg width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+          <circle cx="8" cy="8" r="6.25" stroke="currentColor" strokeWidth="1.3" />
+          <path
+            d="M8 7.25v3.5"
+            stroke="currentColor"
+            strokeWidth="1.3"
+            strokeLinecap="round"
+          />
+          <circle cx="8" cy="5.1" r="0.8" fill="currentColor" />
+        </svg>
+      </button>
+      <span
+        role="tooltip"
+        className="pointer-events-none invisible absolute bottom-full left-1/2 z-20 mb-1.5 w-max max-w-56 -translate-x-1/2 rounded-sm bg-zinc-900 px-2.5 py-1.5 text-[11px] font-normal normal-case leading-snug tracking-normal text-white opacity-0 shadow-sm transition-opacity group-hover:visible group-hover:opacity-100 group-focus-within:visible group-focus-within:opacity-100"
+      >
+        {text}
+      </span>
+    </span>
+  );
+}
+
+/**
+ * A field label with an optional hover hint. The icon is a sibling of the
+ * label rather than a child: a label stretches the full width of its column,
+ * so nesting the icon inside would make the whole row part of its hover area.
+ */
+function FieldLabel({
+  children,
+  tip,
+  plain,
+}: {
+  children: React.ReactNode;
+  tip?: string;
+  /** Heading for a group of controls rather than a label for one input. */
+  plain?: boolean;
+}) {
+  const Text = plain ? 'p' : 'label';
+  return (
+    <span className="mb-1 flex items-center gap-1">
+      <Text className={cn(labelClass, 'mb-0')}>{children}</Text>
+      {tip && <InfoTip text={tip} />}
+    </span>
+  );
+}
+
+/** One row of capability checkboxes under a heading that explains the group. */
+function CapabilityGroup({
+  title,
+  tip,
+  flags,
+  onToggle,
+}: {
+  title: string;
+  tip: string;
+  flags: Record<string, boolean>;
+  onToggle: (key: string) => void;
+}) {
+  return (
+    <div>
+      <FieldLabel plain tip={tip}>
+        {title}
+      </FieldLabel>
+      <div className="flex flex-wrap gap-3">
+        {Object.keys(flags).map((key) => (
+          <label
+            key={key}
+            className="flex cursor-pointer items-center gap-1.5 text-sm text-zinc-700"
+          >
+            <input type="checkbox" checked={flags[key]} onChange={() => onToggle(key)} />
+            {key}
+          </label>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 const STEPS: { key: WizardStep; label: string }[] = [
   { key: 'upload', label: 'Upload' },
   { key: 'requirements', label: 'Models' },
@@ -399,7 +491,7 @@ function ProvenanceFields({
   return (
     <div className="grid md:grid-cols-2 gap-3">
       <div>
-        <label className={labelClass}>Download URL</label>
+        <FieldLabel tip="Direct link to the model file itself. The plugin uses this to fetch the model when someone is missing it.">Download URL</FieldLabel>
         <input
           className={inputClass}
           value={value.download_url}
@@ -408,7 +500,7 @@ function ProvenanceFields({
         />
       </div>
       <div>
-        <label className={labelClass}>License</label>
+        <FieldLabel tip="The licence the model is released under, e.g. CreativeML Open RAIL-M. Tells people what they are allowed to do with what they make.">License</FieldLabel>
         <input
           className={inputClass}
           value={value.license}
@@ -417,7 +509,7 @@ function ProvenanceFields({
         />
       </div>
       <div>
-        <label className={labelClass}>Attribution</label>
+        <FieldLabel tip="Who made the model. Shown as the credit line to anyone using this workflow.">Attribution</FieldLabel>
         <input
           className={inputClass}
           value={value.attribution}
@@ -426,7 +518,7 @@ function ProvenanceFields({
         />
       </div>
       <div>
-        <label className={labelClass}>Attribution URL</label>
+        <FieldLabel tip="Link to the model's original page or its author, so the credit can be followed back to the source.">Attribution URL</FieldLabel>
         <input
           className={inputClass}
           value={value.attribution_url}
@@ -435,7 +527,7 @@ function ProvenanceFields({
         />
       </div>
       <div className="md:col-span-2">
-        <label className={labelClass}>Data Provenance Notes</label>
+        <FieldLabel tip="What the model was trained on, and anything known about its dataset, lineage, or licensing concerns.">Data Provenance Notes</FieldLabel>
         <textarea
           className={cn(inputClass, 'min-h-[60px] resize-y')}
           value={value.data_provenance_notes}
@@ -489,7 +581,6 @@ export default function WorkflowWizard() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const thumbInputRef = useRef<HTMLInputElement>(null);
   const [isDragging, setIsDragging] = useState(false);
-  const [workflowExpanded, setWorkflowExpanded] = useState(false);
 
   // ── Step 1: Upload ────────────────────────────────────────────────────────
 
@@ -1085,7 +1176,7 @@ export default function WorkflowWizard() {
                     {p.selected && (
                       <div className="mt-4 pl-6 space-y-3">
                         <div className="max-w-xs">
-                          <label className={labelClass}>Category</label>
+                          <FieldLabel tip="Which ComfyUI models/ subfolder this file belongs in. Determines where the plugin puts it on disk.">Category</FieldLabel>
                           <select
                             className={inputClass}
                             value={p.category}
@@ -1177,7 +1268,7 @@ export default function WorkflowWizard() {
 
                     <div className="grid md:grid-cols-2 gap-4">
                       <div>
-                        <label className={labelClass}>Variable Name</label>
+                        <FieldLabel tip="What this control is called in the Rhino plugin. Also generates the binds_to token that links it back to the node.">Variable Name</FieldLabel>
                         <input
                           className={inputClass}
                           value={v.name}
@@ -1186,7 +1277,7 @@ export default function WorkflowWizard() {
                         />
                       </div>
                       <div className="md:col-span-2">
-                        <label className={labelClass}>Description</label>
+                        <FieldLabel tip="A short line telling someone what this control actually changes about the image.">Description</FieldLabel>
                         <input
                           className={inputClass}
                           value={v.description}
@@ -1195,7 +1286,7 @@ export default function WorkflowWizard() {
                         />
                       </div>
                       <div>
-                        <label className={labelClass}>Default</label>
+                        <FieldLabel tip="The value used when nobody touches the control. Pre-filled with whatever you left in the ComfyUI graph.">Default</FieldLabel>
                         <input
                           className={inputClass}
                           value={v.default}
@@ -1205,7 +1296,7 @@ export default function WorkflowWizard() {
                       {(v.type === 'int' || v.type === 'float') && (
                         <>
                           <div>
-                            <label className={labelClass}>Min</label>
+                            <FieldLabel tip="Lowest value the control will allow.">Min</FieldLabel>
                             <input
                               className={inputClass}
                               value={v.min}
@@ -1213,7 +1304,7 @@ export default function WorkflowWizard() {
                             />
                           </div>
                           <div>
-                            <label className={labelClass}>Max</label>
+                            <FieldLabel tip="Highest value the control will allow.">Max</FieldLabel>
                             <input
                               className={inputClass}
                               value={v.max}
@@ -1221,7 +1312,7 @@ export default function WorkflowWizard() {
                             />
                           </div>
                           <div>
-                            <label className={labelClass}>Step</label>
+                            <FieldLabel tip="How far the value jumps each time the control is nudged.">Step</FieldLabel>
                             <input
                               className={inputClass}
                               value={v.step}
@@ -1292,7 +1383,7 @@ export default function WorkflowWizard() {
               Workflow Info
             </div>
             <div>
-              <label className={labelClass}>Workflow Name *</label>
+              <FieldLabel tip="How this workflow is listed in the Rhino plugin. Also becomes the download filename.">Workflow Name *</FieldLabel>
               <input
                 className={inputClass}
                 value={workflowName}
@@ -1302,7 +1393,7 @@ export default function WorkflowWizard() {
               />
             </div>
             <div>
-              <label className={labelClass}>Description</label>
+              <FieldLabel tip="What this workflow is for and the kind of images it makes. Shown when choosing between workflows.">Description</FieldLabel>
               <textarea
                 className={cn(inputClass, 'min-h-[80px] resize-y')}
                 value={description}
@@ -1311,7 +1402,7 @@ export default function WorkflowWizard() {
               />
             </div>
             <div>
-              <label className={labelClass}>Thumbnail</label>
+              <FieldLabel tip="A sample render showing what this workflow produces. Shown as its preview when picking a workflow.">Thumbnail</FieldLabel>
               <input
                 ref={thumbInputRef}
                 type="file"
@@ -1348,7 +1439,7 @@ export default function WorkflowWizard() {
             </div>
             <div className="grid md:grid-cols-2 gap-4">
               <div>
-                <label className={labelClass}>Author</label>
+                <FieldLabel tip="Who built this workflow. Credited to anyone who uses it.">Author</FieldLabel>
                 <input
                   className={inputClass}
                   value={attribution.author}
@@ -1356,7 +1447,7 @@ export default function WorkflowWizard() {
                 />
               </div>
               <div>
-                <label className={labelClass}>Author URL</label>
+                <FieldLabel tip="Link to the author's site or profile.">Author URL</FieldLabel>
                 <input
                   className={inputClass}
                   type="url"
@@ -1365,7 +1456,7 @@ export default function WorkflowWizard() {
                 />
               </div>
               <div>
-                <label className={labelClass}>License</label>
+                <FieldLabel tip="How other people may use and share this workflow.">License</FieldLabel>
                 <input
                   className={inputClass}
                   value={attribution.license}
@@ -1380,64 +1471,26 @@ export default function WorkflowWizard() {
               Capability Flags
             </div>
 
-            <div>
-              <p className={labelClass}>Global Guidance</p>
-              <div className="flex flex-wrap gap-3">
-                {Object.keys(caps.global_guidance_capabilities).map((key) => (
-                  <label
-                    key={key}
-                    className="flex items-center gap-1.5 text-sm text-zinc-700 cursor-pointer"
-                  >
-                    <input
-                      type="checkbox"
-                      checked={(caps.global_guidance_capabilities as Record<string, boolean>)[key]}
-                      onChange={() => toggleCap('global_guidance_capabilities', key)}
-                    />
-                    {key}
-                  </label>
-                ))}
-              </div>
-            </div>
+            <CapabilityGroup
+              title="Global Guidance"
+              tip="Guidance that applies to the whole image at once."
+              flags={caps.global_guidance_capabilities}
+              onToggle={(key) => toggleCap('global_guidance_capabilities', key)}
+            />
 
-            <div>
-              <p className={labelClass}>Regional Guidance</p>
-              <div className="flex flex-wrap gap-3">
-                {Object.keys(caps.regional_guidance_capabilities).map((key) => (
-                  <label
-                    key={key}
-                    className="flex items-center gap-1.5 text-sm text-zinc-700 cursor-pointer"
-                  >
-                    <input
-                      type="checkbox"
-                      checked={
-                        (caps.regional_guidance_capabilities as Record<string, boolean>)[key]
-                      }
-                      onChange={() => toggleCap('regional_guidance_capabilities', key)}
-                    />
-                    {key}
-                  </label>
-                ))}
-              </div>
-            </div>
+            <CapabilityGroup
+              title="Regional Guidance"
+              tip="Guidance aimed at individual materials or regions of the model rather than the whole image."
+              flags={caps.regional_guidance_capabilities}
+              onToggle={(key) => toggleCap('regional_guidance_capabilities', key)}
+            />
 
-            <div>
-              <p className={labelClass}>Spatial Guidance</p>
-              <div className="flex flex-wrap gap-3">
-                {Object.keys(caps.spatial_guidance_capabilities).map((key) => (
-                  <label
-                    key={key}
-                    className="flex items-center gap-1.5 text-sm text-zinc-700 cursor-pointer"
-                  >
-                    <input
-                      type="checkbox"
-                      checked={(caps.spatial_guidance_capabilities as Record<string, boolean>)[key]}
-                      onChange={() => toggleCap('spatial_guidance_capabilities', key)}
-                    />
-                    {key}
-                  </label>
-                ))}
-              </div>
-            </div>
+            <CapabilityGroup
+              title="Spatial Guidance"
+              tip="Guidance read from the 3D geometry itself, so the render follows the model."
+              flags={caps.spatial_guidance_capabilities}
+              onToggle={(key) => toggleCap('spatial_guidance_capabilities', key)}
+            />
           </div>
 
           <div className="flex justify-between">
@@ -1461,44 +1514,20 @@ export default function WorkflowWizard() {
       {/* ── Step 6: Preview & Download ─────────────────────────────────── */}
       {step === 'preview' && (
         <div className="space-y-6">
-          {(() => {
-            const out = buildOutput();
-            const { workflow: workflowGraph, ...meta } = out as Record<string, unknown> & {
-              workflow: unknown;
-            };
-            return (
-              <div className="border border-zinc-200 rounded-sm p-5">
-                <div className="flex items-center justify-between mb-4">
-                  <div className="font-semibold text-xs uppercase tracking-wide text-zinc-500">
-                    Output Preview
-                  </div>
-                  <button
-                    onClick={downloadOutput}
-                    className="border border-zinc-300 rounded-sm px-4 py-1.5 text-sm font-medium text-zinc-900 bg-white hover:bg-zinc-50 transition-colors"
-                  >
-                    Download .pseudorandom.json
-                  </button>
-                </div>
-                <pre className="text-xs text-zinc-600 bg-zinc-50 border border-zinc-100 rounded-sm p-4 overflow-auto max-h-[500px] whitespace-pre-wrap break-all">
-                  {JSON.stringify(meta, null, 2)}
-                </pre>
-                <div className="mt-3 border border-zinc-100 rounded-sm overflow-hidden">
-                  <button
-                    onClick={() => setWorkflowExpanded((v) => !v)}
-                    className="w-full flex items-center justify-between px-4 py-2.5 text-xs font-semibold uppercase tracking-wide text-zinc-500 bg-zinc-50 hover:bg-zinc-100 transition-colors"
-                  >
-                    <span>workflow graph (tokens inserted)</span>
-                    <span>{workflowExpanded ? '▲ hide' : '▼ show'}</span>
-                  </button>
-                  {workflowExpanded && (
-                    <pre className="text-xs text-zinc-600 p-4 overflow-auto max-h-[400px] whitespace-pre-wrap break-all border-t border-zinc-100">
-                      {JSON.stringify(workflowGraph, null, 2)}
-                    </pre>
-                  )}
-                </div>
+          <div className="border border-zinc-200 rounded-sm p-5">
+            <div className="flex items-center justify-between mb-4">
+              <div className="font-semibold text-xs uppercase tracking-wide text-zinc-500">
+                Output Preview
               </div>
-            );
-          })()}
+              <button
+                onClick={downloadOutput}
+                className="border border-zinc-300 rounded-sm px-4 py-1.5 text-sm font-medium text-zinc-900 bg-white hover:bg-zinc-50 transition-colors"
+              >
+                Download .pseudorandom.json
+              </button>
+            </div>
+            <JsonTree data={buildOutput()} maxHeight={560} />
+          </div>
 
           <div className="flex justify-between">
             <button
