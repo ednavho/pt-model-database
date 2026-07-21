@@ -7,23 +7,29 @@ import {
   PSEUDO_CLASS_TYPE_PREFIX,
   PSEUDO_LOAD_MODEL_SNAPSHOT,
   PSEUDO_SEED_NODE,
-  PSEUDO_VARIABLE_NODE,
+  PSEUDO_VARIABLE_CLASS_TYPES,
   PSEUDO_VETTED_MODEL_LOADER,
-  SEED_NODE_FIELDS,
+  PRESET_LOADER_CLASS_TYPES,
+  SEED_TOKEN,
   SNAPSHOT_NODE_FIELDS,
   TEMP_PATH_TOKEN,
-  VARIABLE_NODE_FIELDS,
+  VALUE_FIELD,
+  VARIABLE_NAME_INPUT_KEYS,
   VETTED_LOADER_FIELDS,
-  seedTokenAt,
   tokenFromName,
+  type VarType,
 } from '@/config/pseudoNodeTypes';
 import { ModelDetail } from '@/types/database';
 import { cn } from '@/utils/cn';
 import { useCallback, useRef, useState } from 'react';
 
-// ── Graph shapes ────────────────────────────────────────────────────────────
+// ── Graph shape ─────────────────────────────────────────────────────────────
+//
+// Only ComfyUI's "Save (API Format)" export is accepted: a flat map of
+// nodeId → node. That's the shape ComfyUI's /prompt endpoint consumes, and
+// the graph we embed is handed straight to it at render time — a canvas
+// export ("Save") would package cleanly but never run.
 
-// API format: flat map of nodeId → node (ComfyUI "Save (API Format)")
 type ComfyAPINode = {
   inputs: Record<string, unknown>;
   class_type: string;
@@ -31,80 +37,52 @@ type ComfyAPINode = {
 };
 type ComfyAPIGraph = Record<string, ComfyAPINode>;
 
-// UI format: LiteGraph v0.4 (ComfyUI regular "Save")
-type ComfyUINode = {
-  id: number;
-  type: string;
-  title?: string;
-  widgets_values: unknown[];
-  properties?: { 'Node name for S&R'?: string };
-};
-type ComfyUIGraph = {
-  nodes: ComfyUINode[];
-  definitions?: { subgraphs?: Array<{ nodes: ComfyUINode[] }> };
-  version: number;
-};
-
-type FieldDesc = { api: string; ui: number };
-
 /**
- * Both export formats normalized to one shape so detection logic is written
- * once. `set` writes through to the underlying node, so cloning the graph and
- * re-normalizing is enough to produce a modified graph.
+ * A node with accessors that write through to the underlying graph, so
+ * cloning and re-wrapping is enough to produce a modified graph.
  */
 type Node = {
   id: string;
   class_type: string;
   title: string;
-  get: (f: FieldDesc) => unknown;
-  set: (f: FieldDesc, v: unknown) => void;
+  get: (key: string) => unknown;
+  set: (key: string, v: unknown) => void;
   strings: () => { field: string; value: string }[];
 };
 
-function normalize(parsed: unknown): { nodes: Node[]; format: 'api' | 'ui' } {
-  const maybeUI = parsed as ComfyUIGraph;
-  if (Array.isArray(maybeUI?.nodes) && typeof maybeUI?.version === 'number') {
-    const raw = [
-      ...maybeUI.nodes,
-      ...(maybeUI.definitions?.subgraphs?.flatMap((sg) => sg.nodes) ?? []),
-    ];
-    return {
-      format: 'ui',
-      nodes: raw.map((n) => ({
-        id: String(n.id),
-        class_type: n.type,
-        title: n.title ?? n.properties?.['Node name for S&R'] ?? n.type,
-        get: (f) => n.widgets_values?.[f.ui],
-        set: (f, v) => {
-          if (!Array.isArray(n.widgets_values)) n.widgets_values = [];
-          n.widgets_values[f.ui] = v;
-        },
-        strings: () =>
-          (n.widgets_values ?? []).flatMap((v, i) =>
-            typeof v === 'string' ? [{ field: `widgets_values[${i}]`, value: v }] : []
-          ),
-      })),
-    };
-  }
+function wrap(parsed: unknown): Node[] {
+  return Object.entries(parsed as ComfyAPIGraph).map(([id, n]) => ({
+    id,
+    class_type: n.class_type,
+    title: n._meta?.title ?? n.class_type,
+    get: (key) => n.inputs?.[key],
+    set: (key, v) => {
+      if (!n.inputs) n.inputs = {};
+      n.inputs[key] = v;
+    },
+    strings: () =>
+      Object.entries(n.inputs ?? {}).flatMap(([k, v]) =>
+        typeof v === 'string' ? [{ field: k, value: v }] : []
+      ),
+  }));
+}
 
-  const api = parsed as ComfyAPIGraph;
-  return {
-    format: 'api',
-    nodes: Object.entries(api).map(([id, n]) => ({
-      id,
-      class_type: n.class_type,
-      title: n._meta?.title ?? n.class_type,
-      get: (f) => n.inputs?.[f.api],
-      set: (f, v) => {
-        if (!n.inputs) n.inputs = {};
-        n.inputs[f.api] = v;
-      },
-      strings: () =>
-        Object.entries(n.inputs ?? {}).flatMap(([k, v]) =>
-          typeof v === 'string' ? [{ field: k, value: v }] : []
-        ),
-    })),
-  };
+/**
+ * A canvas export ("Save") has a top-level `nodes` array and `version`;
+ * an API export is a bare map of id → node. Telling them apart lets us
+ * point the nerd at the right menu item instead of failing vaguely.
+ */
+function looksLikeCanvasExport(parsed: unknown): boolean {
+  const g = parsed as { nodes?: unknown; version?: unknown };
+  return Array.isArray(g?.nodes) && typeof g?.version === 'number';
+}
+
+function looksLikeApiExport(parsed: unknown): boolean {
+  const entries = Object.values(parsed as Record<string, unknown>);
+  if (entries.length === 0) return false;
+  return entries.every(
+    (n) => typeof n === 'object' && n !== null && typeof (n as ComfyAPINode).class_type === 'string'
+  );
 }
 
 // ── Wizard state types ──────────────────────────────────────────────────────
@@ -135,6 +113,19 @@ type DbModel = {
   dbMatch: ModelDetail | null;
 };
 
+/**
+ * A loader that picks models by preset label rather than filename, so the
+ * scan can't name what it needs. Flagged for the nerd to resolve by hand.
+ */
+type PresetLoader = {
+  nodeId: string;
+  nodeTitle: string;
+  class_type: string;
+  preset: string;
+  loads: string[];
+  note: string;
+};
+
 /** A filename-shaped string found by scanning. Needs nerd confirmation. */
 type PossibleModel = {
   key: string;
@@ -146,25 +137,18 @@ type PossibleModel = {
   provenance: ManualProvenance;
 };
 
-type VarType = 'int' | 'float' | 'string';
-
 type DetectedVariable = {
   nodeId: string;
+  class_type: string;
   token: string;
   name: string;
   description: string;
+  /** Determined by which PseudoVariable* class_type matched — not editable. */
   type: VarType;
   default: string;
   min: string;
   max: string;
   step: string;
-  is_basic: boolean;
-};
-
-type DetectedSeed = {
-  nodeId: string;
-  title: string;
-  token: string;
 };
 
 type WorkflowAttribution = { author: string; author_url: string; license: string };
@@ -192,20 +176,41 @@ type Analysis = {
   nodeCount: number;
   dbModels: DbModel[];
   possibleModels: PossibleModel[];
+  presetLoaders: PresetLoader[];
   variables: DetectedVariable[];
-  seeds: DetectedSeed[];
+  /** Node ids of every PseudoSeed. Surfaced as one seed concept, not one each. */
+  seedNodeIds: string[];
   snapshotCount: number;
   usesPseudocomfy: boolean;
 };
 
 // ── Detection ───────────────────────────────────────────────────────────────
 
-function isVarType(v: string): v is VarType {
-  return v === 'int' || v === 'float' || v === 'string';
+/**
+ * The nerd-facing name of a Variable node. Tries the configured input keys,
+ * then falls back to the node title — which is where names actually live in
+ * the workflows built so far.
+ */
+function readVariableName(node: Node): string {
+  for (const key of VARIABLE_NAME_INPUT_KEYS) {
+    const v = node.get(key);
+    if (typeof v === 'string' && v.trim()) return v.trim();
+  }
+  return node.title.trim();
+}
+
+/** The nerd's test value from ComfyUI, used to pre-fill the wizard's default. */
+function readExistingValue(node: Node, type: VarType): string {
+  const v = node.get(VALUE_FIELD);
+  if (v === null || v === undefined) return type === 'string' ? '' : '0';
+  // A linked input is [nodeId, slot] — a wire, not a literal value.
+  if (Array.isArray(v)) return type === 'string' ? '' : '0';
+  if (typeof v === 'object') return type === 'string' ? '' : '0';
+  return String(v);
 }
 
 function analyze(parsed: unknown): Analysis {
-  const { nodes } = normalize(parsed);
+  const nodes = wrap(parsed);
 
   const dbModels: DbModel[] = nodes
     .filter((n) => n.class_type === PSEUDO_VETTED_MODEL_LOADER)
@@ -243,36 +248,48 @@ function analyze(parsed: unknown): Analysis {
     }
   }
 
-  const variables: DetectedVariable[] = nodes
-    .filter((n) => n.class_type === PSEUDO_VARIABLE_NODE)
+  const presetLoaders: PresetLoader[] = nodes
+    .filter((n) => n.class_type in PRESET_LOADER_CLASS_TYPES)
     .map((n) => {
-      const name = String(n.get(VARIABLE_NODE_FIELDS.name) ?? '');
-      const rawType = String(n.get(VARIABLE_NODE_FIELDS.type) ?? 'float').toLowerCase();
-      const type: VarType = isVarType(rawType) ? rawType : 'float';
+      const spec = PRESET_LOADER_CLASS_TYPES[n.class_type];
+      const preset = n.get(spec.presetField);
       return {
         nodeId: n.id,
+        nodeTitle: n.title,
+        class_type: n.class_type,
+        preset: typeof preset === 'string' ? preset : '',
+        loads: [...spec.loads],
+        note: spec.note,
+      };
+    });
+
+  const variables: DetectedVariable[] = nodes
+    .filter((n) => n.class_type in PSEUDO_VARIABLE_CLASS_TYPES)
+    .map((n) => {
+      // The matched class_type IS the type — there's no type field to read.
+      const type = PSEUDO_VARIABLE_CLASS_TYPES[n.class_type];
+      const name = readVariableName(n);
+      return {
+        nodeId: n.id,
+        class_type: n.class_type,
         token: tokenFromName(name),
         name,
         description: '',
         type,
-        default: type === 'string' ? '' : '0',
+        default: readExistingValue(n, type),
         min: '0',
         max: '1',
         step: type === 'int' ? '1' : '0.05',
-        is_basic: false,
       };
     });
-
-  const seeds: DetectedSeed[] = nodes
-    .filter((n) => n.class_type === PSEUDO_SEED_NODE)
-    .map((n, i) => ({ nodeId: n.id, title: n.title, token: seedTokenAt(i) }));
 
   return {
     nodeCount: nodes.length,
     dbModels,
     possibleModels,
+    presetLoaders,
     variables,
-    seeds,
+    seedNodeIds: nodes.filter((n) => n.class_type === PSEUDO_SEED_NODE).map((n) => n.id),
     snapshotCount: nodes.filter((n) => n.class_type === PSEUDO_LOAD_MODEL_SNAPSHOT).length,
     usesPseudocomfy: nodes.some((n) => n.class_type.startsWith(PSEUDO_CLASS_TYPE_PREFIX)),
   };
@@ -283,21 +300,17 @@ function analyze(parsed: unknown): Analysis {
  * entire value of the node's own field; downstream links are untouched and
  * carry the resolved value at render time.
  */
-function buildWorkflowGraph(
-  rawGraph: unknown,
-  variables: DetectedVariable[],
-  seeds: DetectedSeed[]
-): unknown {
+function buildWorkflowGraph(rawGraph: unknown, variables: DetectedVariable[]): unknown {
   const clone = structuredClone(rawGraph);
-  const { nodes } = normalize(clone);
+  const nodes = wrap(clone);
 
   for (const node of nodes) {
-    if (node.class_type === PSEUDO_VARIABLE_NODE) {
+    if (node.class_type in PSEUDO_VARIABLE_CLASS_TYPES) {
       const v = variables.find((x) => x.nodeId === node.id);
-      if (v) node.set(VARIABLE_NODE_FIELDS.value, v.token);
+      if (v) node.set(VALUE_FIELD, v.token);
     } else if (node.class_type === PSEUDO_SEED_NODE) {
-      const s = seeds.find((x) => x.nodeId === node.id);
-      if (s) node.set(SEED_NODE_FIELDS.value, s.token);
+      // Every seed node gets the same token — the plugin drives one seed.
+      node.set(VALUE_FIELD, SEED_TOKEN);
     } else if (node.class_type === PSEUDO_LOAD_MODEL_SNAPSHOT) {
       node.set(SNAPSHOT_NODE_FIELDS.path, TEMP_PATH_TOKEN);
     }
@@ -447,8 +460,9 @@ export default function WorkflowWizard() {
   const [nodeCount, setNodeCount] = useState(0);
   const [dbModels, setDbModels] = useState<DbModel[]>([]);
   const [possibleModels, setPossibleModels] = useState<PossibleModel[]>([]);
+  const [presetLoaders, setPresetLoaders] = useState<PresetLoader[]>([]);
   const [variables, setVariables] = useState<DetectedVariable[]>([]);
-  const [seeds, setSeeds] = useState<DetectedSeed[]>([]);
+  const [seedNodeIds, setSeedNodeIds] = useState<string[]>([]);
   const [usesPseudocomfy, setUsesPseudocomfy] = useState(false);
   const [matchLoading, setMatchLoading] = useState(false);
   const [validationErrors, setValidationErrors] = useState<string[]>([]);
@@ -492,12 +506,26 @@ export default function WorkflowWizard() {
         throw new Error('Expected a ComfyUI workflow JSON file.');
       }
 
+      if (looksLikeCanvasExport(parsed)) {
+        setBlockingError(
+          'This is a canvas export — the file ComfyUI saves so you can keep editing the workflow. It records node positions and wiring, but not the runnable graph, so a workflow packaged from it would never render. In ComfyUI use Workflow → Export (API) instead, then upload that file.'
+        );
+        return;
+      }
+      if (!looksLikeApiExport(parsed)) {
+        setBlockingError(
+          "This doesn't look like a ComfyUI API export. Expected a JSON object mapping node ids to nodes, each with a class_type. In ComfyUI use Workflow → Export (API)."
+        );
+        return;
+      }
+
       const a = analyze(parsed);
 
-      // A workflow can't render without a snapshot loader — hard stop.
+      // Without a snapshot loader the workflow can't receive scene data from
+      // Rhino, so it could never render. That's the only hard stop.
       if (a.snapshotCount === 0) {
         setBlockingError(
-          `No ${PSEUDO_LOAD_MODEL_SNAPSHOT} node found. Every Pseudorandom workflow needs exactly one — it's what receives the scene data from Rhino at render time. Without it the workflow can't run. Add one in ComfyUI and re-upload.`
+          `No ${PSEUDO_LOAD_MODEL_SNAPSHOT} node found. It's what receives the scene data from Rhino at render time, so the workflow can't run without it. Add one in ComfyUI and re-upload.`
         );
         return;
       }
@@ -508,23 +536,20 @@ export default function WorkflowWizard() {
           `Found ${a.snapshotCount} ${PSEUDO_LOAD_MODEL_SNAPSHOT} nodes, but there should be exactly one. Only one will receive scene data — remove the extras.`
         );
       }
-      if (a.variables.length === 0) {
+      if (a.seedNodeIds.length === 0) {
         warnings.push(
-          'No Variable nodes found. Nothing in this workflow will be adjustable from the Rhino plugin.'
+          `No ${PSEUDO_SEED_NODE} node found. The workflow will still render, but the seed is fixed at whatever the graph already holds — nobody using it in the plugin will be able to reroll and get a different image.`
         );
       }
-      if (a.seeds.length === 0) {
-        warnings.push(
-          'No Seed nodes found. The jock won’t be able to change the seed from the Rhino plugin.'
-        );
-      }
+      // Zero Variable nodes is normal — it just means nothing is adjustable.
 
       setRawGraph(parsed);
       setNodeCount(a.nodeCount);
       setDbModels(a.dbModels);
       setPossibleModels(a.possibleModels);
+      setPresetLoaders(a.presetLoaders);
       setVariables(a.variables);
-      setSeeds(a.seeds);
+      setSeedNodeIds(a.seedNodeIds);
       setUsesPseudocomfy(a.usesPseudocomfy);
       setUploadWarnings(warnings);
     } catch (e) {
@@ -594,15 +619,15 @@ export default function WorkflowWizard() {
     );
   };
 
-  const addManualModel = () => {
+  const addManualModel = (category = 'checkpoints', label = 'Added by hand') => {
     setPossibleModels((prev) => [
       ...prev,
       {
-        key: `manual:${Date.now()}`,
+        key: `manual:${Date.now()}:${Math.random().toString(36).slice(2, 7)}`,
         nodeId: null,
-        nodeTitle: 'Added by hand',
+        nodeTitle: label,
         fileName: '',
-        category: 'checkpoints',
+        category,
         selected: true,
         provenance: { ...emptyProvenance },
       },
@@ -704,6 +729,8 @@ export default function WorkflowWizard() {
         };
       });
 
+    // Shape and key order follow the shipped pseudorandom workflows: name,
+    // type, description, default, binds_to, then min/max/step for numerics.
     const variablesDef = variables.map((v) => {
       const isNumeric = v.type === 'int' || v.type === 'float';
       return {
@@ -712,11 +739,10 @@ export default function WorkflowWizard() {
         description: v.description,
         default: isNumeric ? (isNaN(Number(v.default)) ? 0 : Number(v.default)) : v.default,
         binds_to: v.token,
-        is_basic: v.is_basic,
         ...(isNumeric && {
           min: isNaN(Number(v.min)) ? 0 : Number(v.min),
           max: isNaN(Number(v.max)) ? 1 : Number(v.max),
-          step: isNaN(Number(v.step)) ? 0.01 : Number(v.step),
+          step: isNaN(Number(v.step)) ? (v.type === 'int' ? 1 : 0.05) : Number(v.step),
         }),
       };
     });
@@ -739,7 +765,7 @@ export default function WorkflowWizard() {
         ...scannedRequirements,
         ...(usesPseudocomfy ? [PSEUDOCOMFY_REQUIREMENT] : []),
       ],
-      workflow: buildWorkflowGraph(rawGraph, variables, seeds),
+      workflow: buildWorkflowGraph(rawGraph, variables),
     };
   };
 
@@ -801,6 +827,9 @@ export default function WorkflowWizard() {
               <div>
                 <p className="text-zinc-500 mb-1">Drag and drop a ComfyUI workflow JSON file</p>
                 <p className="text-xs text-zinc-400">or click to browse</p>
+                <p className="text-xs text-zinc-400 mt-3">
+                  Must be an API export — in ComfyUI, Workflow → Export (API)
+                </p>
               </div>
             )}
           </div>
@@ -838,8 +867,13 @@ export default function WorkflowWizard() {
               Parsed <strong>{nodeCount}</strong> nodes. Found{' '}
               <strong>{dbModels.length}</strong> database model(s),{' '}
               <strong>{possibleModels.length}</strong> possible model file(s),{' '}
+              {presetLoaders.length > 0 && (
+                <>
+                  <strong>{presetLoaders.length}</strong> preset-based loader(s),{' '}
+                </>
+              )}
               <strong>{variables.length}</strong> variable(s) and{' '}
-              <strong>{seeds.length}</strong> seed(s).
+              <strong>{seedNodeIds.length}</strong> seed node(s).
             </div>
           )}
 
@@ -950,7 +984,7 @@ export default function WorkflowWizard() {
                 Other Possible Models
               </div>
               <button
-                onClick={addManualModel}
+                onClick={() => addManualModel()}
                 className="text-xs border border-zinc-200 rounded-sm px-3 py-1 text-zinc-600 hover:border-zinc-400 transition-colors shrink-0"
               >
                 + Add a model by hand
@@ -962,10 +996,51 @@ export default function WorkflowWizard() {
               hand.
             </p>
 
+            {presetLoaders.length > 0 && (
+              <div className="border border-amber-200 bg-amber-50 rounded-sm p-4 mb-4 space-y-3">
+                <div>
+                  <p className="text-xs font-semibold text-amber-800">
+                    Models the scan can&apos;t see
+                  </p>
+                  <p className="text-xs text-amber-800 mt-1">
+                    These nodes choose their models by preset name, so no filename appears anywhere
+                    in the workflow. They still need to be listed as requirements — add each one by
+                    hand below.
+                  </p>
+                </div>
+                {presetLoaders.map((pl) => (
+                  <div key={pl.nodeId} className="border border-amber-200 bg-white rounded-sm p-3">
+                    <p className="text-sm text-zinc-900">
+                      {pl.nodeTitle}{' '}
+                      <span className="text-xs text-zinc-400">· node {pl.nodeId}</span>
+                    </p>
+                    {pl.preset && (
+                      <p className="text-xs text-zinc-500 mt-0.5">
+                        preset: <code className="font-mono">{pl.preset}</code>
+                      </p>
+                    )}
+                    <p className="text-xs text-zinc-500 mt-1">{pl.note}</p>
+                    <div className="flex flex-wrap gap-2 mt-2">
+                      {pl.loads.map((cat) => (
+                        <button
+                          key={cat}
+                          onClick={() => addManualModel(cat, `For ${pl.nodeTitle} (node ${pl.nodeId})`)}
+                          className="text-xs border border-zinc-300 rounded-sm px-2.5 py-1 text-zinc-700 bg-white hover:bg-zinc-50 transition-colors"
+                        >
+                          + Add {cat} model
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+
             {possibleModels.length === 0 ? (
               <p className="text-sm text-zinc-400">
-                No model-shaped filenames found. If this workflow needs a model that isn&apos;t
-                already listed, add it by hand.
+                No model-shaped filenames found
+                {presetLoaders.length > 0 ? ' beyond the ones flagged above' : ''}. If this workflow
+                needs a model that isn&apos;t already listed, add it by hand.
               </p>
             ) : (
               <div className="space-y-4">
@@ -987,12 +1062,15 @@ export default function WorkflowWizard() {
                       />
                       <div className="flex-1 min-w-0">
                         {p.nodeId === null ? (
-                          <input
-                            className={inputClass}
-                            value={p.fileName}
-                            onChange={(e) => updatePossible(p.key, 'fileName', e.target.value)}
-                            placeholder="filename.safetensors"
-                          />
+                          <div>
+                            <input
+                              className={inputClass}
+                              value={p.fileName}
+                              onChange={(e) => updatePossible(p.key, 'fileName', e.target.value)}
+                              placeholder="filename.safetensors"
+                            />
+                            <p className="text-xs text-zinc-400 mt-1">{p.nodeTitle}</p>
+                          </div>
                         ) : (
                           <label htmlFor={`sel_${p.key}`} className="cursor-pointer block">
                             <p className="font-mono text-sm text-zinc-900 break-all">
@@ -1078,8 +1156,8 @@ export default function WorkflowWizard() {
             {variables.length === 0 ? (
               <p className="text-sm text-zinc-400">
                 No Variable nodes in this workflow, so nothing will be adjustable from the plugin.
-                Add {PSEUDO_VARIABLE_NODE} nodes in ComfyUI and re-upload if that&apos;s not what
-                you want.
+                That&apos;s fine — add {Object.keys(PSEUDO_VARIABLE_CLASS_TYPES).join(', ')} nodes
+                in ComfyUI and re-upload if that isn&apos;t what you want.
               </p>
             ) : (
               <div className="space-y-6">
@@ -1089,7 +1167,12 @@ export default function WorkflowWizard() {
                       <code className="font-mono text-xs bg-zinc-100 px-2 py-0.5 rounded">
                         {v.token || '(needs a name)'}
                       </code>
-                      <span className="text-xs text-zinc-400">from node {v.nodeId}</span>
+                      <span className="text-xs border border-zinc-200 text-zinc-500 px-1.5 py-0.5 rounded-sm">
+                        {v.type}
+                      </span>
+                      <span className="text-xs text-zinc-400">
+                        from node {v.nodeId} · {v.class_type}
+                      </span>
                     </div>
 
                     <div className="grid md:grid-cols-2 gap-4">
@@ -1101,18 +1184,6 @@ export default function WorkflowWizard() {
                           onChange={(e) => updateVar(idx, 'name', e.target.value)}
                           placeholder="e.g. Adherence"
                         />
-                      </div>
-                      <div>
-                        <label className={labelClass}>Type</label>
-                        <select
-                          className={inputClass}
-                          value={v.type}
-                          onChange={(e) => updateVar(idx, 'type', e.target.value as VarType)}
-                        >
-                          <option value="float">float</option>
-                          <option value="int">int</option>
-                          <option value="string">string</option>
-                        </select>
                       </div>
                       <div className="md:col-span-2">
                         <label className={labelClass}>Description</label>
@@ -1134,14 +1205,6 @@ export default function WorkflowWizard() {
                       {(v.type === 'int' || v.type === 'float') && (
                         <>
                           <div>
-                            <label className={labelClass}>Step</label>
-                            <input
-                              className={inputClass}
-                              value={v.step}
-                              onChange={(e) => updateVar(idx, 'step', e.target.value)}
-                            />
-                          </div>
-                          <div>
                             <label className={labelClass}>Min</label>
                             <input
                               className={inputClass}
@@ -1157,23 +1220,16 @@ export default function WorkflowWizard() {
                               onChange={(e) => updateVar(idx, 'max', e.target.value)}
                             />
                           </div>
+                          <div>
+                            <label className={labelClass}>Step</label>
+                            <input
+                              className={inputClass}
+                              value={v.step}
+                              onChange={(e) => updateVar(idx, 'step', e.target.value)}
+                            />
+                          </div>
                         </>
                       )}
-                      <div className="md:col-span-2 flex items-center gap-2 pt-1">
-                        <input
-                          type="checkbox"
-                          id={`is_basic_${idx}`}
-                          checked={v.is_basic}
-                          onChange={() => updateVar(idx, 'is_basic', !v.is_basic)}
-                          className="rounded"
-                        />
-                        <label
-                          htmlFor={`is_basic_${idx}`}
-                          className="text-xs text-zinc-600 cursor-pointer"
-                        >
-                          Basic variable — show prominently in the Rhino plugin UI
-                        </label>
-                      </div>
                     </div>
                   </div>
                 ))}
@@ -1188,23 +1244,25 @@ export default function WorkflowWizard() {
               Seeds
             </div>
             <p className="text-xs text-zinc-400 mb-4">
-              Handled automatically — the plugin drives these. They aren&apos;t listed as
-              variables in the output.
+              Handled automatically — the plugin drives the seed. It isn&apos;t listed as a
+              variable and has no binds_to.
             </p>
-            {seeds.length === 0 ? (
-              <p className="text-sm text-zinc-400">No Seed nodes in this workflow.</p>
+            {seedNodeIds.length === 0 ? (
+              <div className="border border-amber-200 bg-amber-50 rounded-sm px-3 py-2">
+                <p className="text-xs text-amber-800">
+                  {`No ${PSEUDO_SEED_NODE} node in this workflow. It will still render, but the seed stays fixed at whatever the graph already holds — every run produces the same image, and nobody using this workflow in the plugin can reroll it. Add one in ComfyUI and re-upload if that isn't what you want.`}
+                </p>
+              </div>
             ) : (
-              <div className="space-y-2">
-                {seeds.map((s) => (
-                  <div key={s.nodeId} className="flex items-center gap-2 text-sm">
-                    <code className="font-mono text-xs bg-zinc-100 px-2 py-0.5 rounded">
-                      {s.token}
-                    </code>
-                    <span className="text-xs text-zinc-400">
-                      {s.title} · node {s.nodeId}
-                    </span>
-                  </div>
-                ))}
+              <div className="flex items-center gap-2">
+                <code className="font-mono text-xs bg-zinc-100 px-2 py-0.5 rounded">
+                  {SEED_TOKEN}
+                </code>
+                <span className="text-xs text-zinc-400">
+                  {seedNodeIds.length === 1
+                    ? `node ${seedNodeIds[0]}`
+                    : `${seedNodeIds.length} nodes (${seedNodeIds.join(', ')}) — all driven together`}
+                </span>
               </div>
             )}
           </div>
