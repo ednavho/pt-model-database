@@ -1,71 +1,80 @@
 // -------------------------------------------------------------------
 // PSEUDOCOMFY NODE SEAM
 //
-// The Package Workflow wizard detects four Pseudocomfy nodes in an
-// uploaded ComfyUI graph. Three of them do not exist yet — Kyle is
-// building them, and the class_type strings below are PLACEHOLDERS.
+// The Package Workflow wizard detects Pseudocomfy nodes in an uploaded
+// ComfyUI graph. Several of these nodes don't exist yet — the
+// class_type strings below are PLACEHOLDERS until Kyle confirms them.
 //
-// TO INTEGRATE: replace the placeholder strings with the real
-// class_type values and correct the field layouts. Nothing else needs
-// to change.
+// Every one of these nodes follows the same shape (confirmed):
+//   { "class_type": "<name>", "inputs": { "value": <thing to replace> } }
+//
+// TO INTEGRATE: fix the class_type strings here. Nothing else changes.
 // -------------------------------------------------------------------
+
+export type VarType = 'int' | 'float' | 'string';
 
 // ── class_type strings ──────────────────────────────────────────────
 
-/** Nerd drops this wherever a value should be jock-adjustable. PLACEHOLDER. */
-export const PSEUDO_VARIABLE_NODE = 'PseudoVariable';
-
-/** Nerd drops this wherever a seed should be jock-adjustable. PLACEHOLDER. */
+/** Marks a field the plugin should treat as the render seed. PLACEHOLDER. */
 export const PSEUDO_SEED_NODE = 'PseudoSeed';
 
-/** Populates a model picker from the provenance database. PLACEHOLDER. */
+/**
+ * One node type per data type — the matched class_type IS the type, so
+ * there's no type field to read.
+ */
+export const PSEUDO_VARIABLE_CLASS_TYPES: Record<string, VarType> = {
+  PseudoVariableInt: 'int',
+  PseudoVariableFloat: 'float',
+  PseudoVariableString: 'string',
+};
+
+/** Marks a model selected from the provenance database. PLACEHOLDER. */
 export const PSEUDO_VETTED_MODEL_LOADER = 'PseudoVettedModelLoader';
 
-/** CONFIRMED — appears in shipped pseudorandom workflows. */
+/** CONFIRMED — appears in shipped workflows carrying a real local path. */
 export const PSEUDO_LOAD_MODEL_SNAPSHOT = 'PseudoLoadModelSnapshot';
 
 // ── Field layouts ───────────────────────────────────────────────────
 //
-// `api` is the key under a node's `inputs` (ComfyUI "Save (API Format)").
-// `ui` is the index into `widgets_values` (ComfyUI regular "Save"), which
-// is positional — these indices are guesses until the nodes exist.
+// Keys under a node's `inputs`. The wizard only accepts API-format
+// exports, so these are always names — never widget indices.
 
-export const VARIABLE_NODE_FIELDS = {
-  name: { api: 'name', ui: 0 },
-  type: { api: 'type', ui: 1 },
-  value: { api: 'value', ui: 2 },
-};
+/** CONFIRMED — the replaceable value is always `inputs.value`. */
+export const VALUE_FIELD = 'value';
 
-export const SEED_NODE_FIELDS = {
-  value: { api: 'value', ui: 0 },
-};
+/**
+ * UNCONFIRMED — where a Variable node carries the name the nerd typed.
+ *
+ * These input keys are tried in order; if none is present we fall back to
+ * the node's title (`_meta.title` in API format). That fallback is not a
+ * guess for its own sake: in the current hand-built workflows the name
+ * genuinely does live in the title — PrimitiveFloat nodes titled
+ * "MASK_SOFTNESS" and "ADHERENCE" are how variables are marked today. If
+ * the real nodes expose a dedicated field, add its key to the front.
+ */
+export const VARIABLE_NAME_INPUT_KEYS = ['name', 'variable_name', 'label'];
 
 export const VETTED_LOADER_FIELDS = {
-  id: { api: 'id', ui: 0 },
-  name_local: { api: 'name_local', ui: 1 },
-  filename_local: { api: 'filename_local', ui: 2 },
-  category_local: { api: 'category_local', ui: 3 },
+  id: 'id',
+  name_local: 'name_local',
+  filename_local: 'filename_local',
+  category_local: 'category_local',
 };
 
 export const SNAPSHOT_NODE_FIELDS = {
-  // CONFIRMED — "string_path": "__PSEUDORANDOM_TEMP_PATH__"
-  path: { api: 'string_path', ui: 0 },
+  // CONFIRMED — holds an absolute local path pre-export.
+  path: 'string_path',
 };
 
 // ── Reserved tokens ─────────────────────────────────────────────────
 //
-// These are written into the graph by the wizard, never typed by the nerd.
-// Multiple seed nodes get ascending suffixes: __PSEUDORANDOM_SEED__,
-// __PSEUDORANDOM_SEED_2__, __PSEUDORANDOM_SEED_3__ …
+// Hardcoded on the plugin side. Never typed by the nerd, never listed in
+// variables[], and never given a binds_to.
 
 export const SEED_TOKEN = '__PSEUDORANDOM_SEED__';
 export const TEMP_PATH_TOKEN = '__PSEUDORANDOM_TEMP_PATH__';
 
-export function seedTokenAt(index: number): string {
-  return index === 0 ? SEED_TOKEN : `__PSEUDORANDOM_SEED_${index + 1}__`;
-}
-
-/** "Mask Softness" → "__MASK_SOFTNESS__" */
+/** "mask softness" → "__MASK_SOFTNESS__" */
 export function tokenFromName(name: string): string {
   const slug = name
     .trim()
@@ -116,14 +125,42 @@ export const MODEL_FILE_EXTENSIONS = [
   '.gguf',
 ];
 
+// ── Loaders that pick models by preset, not filename ────────────────
+//
+// Some loaders select weights through a preset label — "PLUS (high
+// strength)" — and resolve it to real files at runtime. The filename never
+// appears in the graph, so the scan above cannot see these models at all.
+//
+// We can't name the files without encoding each extension's preset table,
+// which would drift out of date. Instead we flag the node so the nerd knows
+// something is there and can add it deliberately.
+
+export const PRESET_LOADER_CLASS_TYPES: Record<
+  string,
+  { presetField: string; loads: ComfyModelFolder[]; note: string }
+> = {
+  PseudoIPAdapterUnifiedLoaderClone: {
+    presetField: 'preset',
+    loads: ['ipadapter', 'clip_vision'],
+    note: 'Resolves its preset to an IPAdapter model and a CLIP vision model when the workflow runs.',
+  },
+  IPAdapterUnifiedLoader: {
+    presetField: 'preset',
+    loads: ['ipadapter', 'clip_vision'],
+    note: 'Resolves its preset to an IPAdapter model and a CLIP vision model when the workflow runs.',
+  },
+  IPAdapterUnifiedLoaderFaceID: {
+    presetField: 'preset',
+    loads: ['ipadapter', 'clip_vision'],
+    note: 'Resolves its preset to a FaceID IPAdapter model and a CLIP vision model when the workflow runs.',
+  },
+};
+
 // ── Extension (custom_nodes) requirements ───────────────────────────
 //
-// ComfyUI's API-format export carries NO record of which extension a node
-// came from. The only signal available is the class_type prefix, so this is
-// a heuristic: any node whose class_type starts with "Pseudo" means the
-// workflow needs Pseudocomfy installed.
-//
-// Other extensions are not handled yet — pending more information.
+// ComfyUI's API export carries NO record of which extension a node came
+// from, so the class_type prefix is the only signal available. Other
+// extensions aren't handled yet.
 
 export const PSEUDO_CLASS_TYPE_PREFIX = 'Pseudo';
 
