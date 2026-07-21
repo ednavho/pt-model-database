@@ -149,7 +149,6 @@ type DetectedVariable = {
   min: string;
   max: string;
   step: string;
-  is_basic: boolean;
 };
 
 type WorkflowAttribution = { author: string; author_url: string; license: string };
@@ -281,7 +280,6 @@ function analyze(parsed: unknown): Analysis {
         min: '0',
         max: '1',
         step: type === 'int' ? '1' : '0.05',
-        is_basic: false,
       };
     });
 
@@ -731,6 +729,8 @@ export default function WorkflowWizard() {
         };
       });
 
+    // Shape and key order follow the shipped pseudorandom workflows: name,
+    // type, description, default, binds_to, then min/max/step for numerics.
     const variablesDef = variables.map((v) => {
       const isNumeric = v.type === 'int' || v.type === 'float';
       return {
@@ -739,14 +739,11 @@ export default function WorkflowWizard() {
         description: v.description,
         default: isNumeric ? (isNaN(Number(v.default)) ? 0 : Number(v.default)) : v.default,
         binds_to: v.token,
-        is_basic: v.is_basic,
         ...(isNumeric && {
           min: isNaN(Number(v.min)) ? 0 : Number(v.min),
           max: isNaN(Number(v.max)) ? 1 : Number(v.max),
+          step: isNaN(Number(v.step)) ? (v.type === 'int' ? 1 : 0.05) : Number(v.step),
         }),
-        // Only int carries a step. NOTE: shipped workflows emit step on floats
-        // too — see the flag raised with this change.
-        ...(v.type === 'int' && { step: isNaN(Number(v.step)) ? 1 : Number(v.step) }),
       };
     });
 
@@ -1205,16 +1202,6 @@ export default function WorkflowWizard() {
                           onChange={(e) => updateVar(idx, 'default', e.target.value)}
                         />
                       </div>
-                      {v.type === 'int' && (
-                        <div>
-                          <label className={labelClass}>Step</label>
-                          <input
-                            className={inputClass}
-                            value={v.step}
-                            onChange={(e) => updateVar(idx, 'step', e.target.value)}
-                          />
-                        </div>
-                      )}
                       {(v.type === 'int' || v.type === 'float') && (
                         <>
                           <div>
@@ -1233,23 +1220,16 @@ export default function WorkflowWizard() {
                               onChange={(e) => updateVar(idx, 'max', e.target.value)}
                             />
                           </div>
+                          <div>
+                            <label className={labelClass}>Step</label>
+                            <input
+                              className={inputClass}
+                              value={v.step}
+                              onChange={(e) => updateVar(idx, 'step', e.target.value)}
+                            />
+                          </div>
                         </>
                       )}
-                      <div className="md:col-span-2 flex items-center gap-2 pt-1">
-                        <input
-                          type="checkbox"
-                          id={`is_basic_${idx}`}
-                          checked={v.is_basic}
-                          onChange={() => updateVar(idx, 'is_basic', !v.is_basic)}
-                          className="rounded"
-                        />
-                        <label
-                          htmlFor={`is_basic_${idx}`}
-                          className="text-xs text-zinc-600 cursor-pointer"
-                        >
-                          Basic variable — show prominently in the Rhino plugin UI
-                        </label>
-                      </div>
                     </div>
                   </div>
                 ))}
