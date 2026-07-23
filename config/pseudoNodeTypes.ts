@@ -34,6 +34,42 @@ export const PSEUDO_VETTED_MODEL_LOADER = 'PseudoVettedModelLoader';
 /** CONFIRMED — appears in shipped workflows carrying a real local path. */
 export const PSEUDO_LOAD_MODEL_SNAPSHOT = 'PseudoLoadModelSnapshot';
 
+/**
+ * CONFIRMED — unpacks the snapshot into its guidance outputs. Its output slots
+ * are what downstream nodes wire into, and which slots are wired tells us which
+ * guidance capabilities the workflow actually uses.
+ */
+export const PSEUDO_UNPACK_MODEL_SNAPSHOT = 'PseudoUnpackModelSnapshot';
+
+/**
+ * Output slots of PseudoUnpackModelSnapshot → the capability flag each one
+ * drives. A workflow that wires slot N into any node is using that capability,
+ * so the wizard can tick the box for the nerd. Slot 2 (masks) has no flag.
+ *
+ *   0 mat_txts     → regional guidance: text
+ *   1 mat_imgs     → regional guidance: image
+ *   2 mat_msks     → (no flag)
+ *   3 env_scene    → global guidance: txt_scene
+ *   4 env_style    → global guidance: txt_style
+ *   5 env_negative → global guidance: txt_negative
+ *   6 img_depth    → spatial guidance: depth
+ *   7 img_edge     → spatial guidance: edge
+ *   8 img_style    → global guidance: img_style
+ */
+export const SNAPSHOT_SLOT_CAPABILITIES: Record<
+  number,
+  { group: string; key: string }
+> = {
+  0: { group: 'regional_guidance_capabilities', key: 'text' },
+  1: { group: 'regional_guidance_capabilities', key: 'image' },
+  3: { group: 'global_guidance_capabilities', key: 'txt_scene' },
+  4: { group: 'global_guidance_capabilities', key: 'txt_style' },
+  5: { group: 'global_guidance_capabilities', key: 'txt_negative' },
+  6: { group: 'spatial_guidance_capabilities', key: 'depth' },
+  7: { group: 'spatial_guidance_capabilities', key: 'edge' },
+  8: { group: 'global_guidance_capabilities', key: 'img_style' },
+};
+
 // ── Field layouts ───────────────────────────────────────────────────
 //
 // Keys under a node's `inputs`. The wizard only accepts API-format
