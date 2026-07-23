@@ -30,6 +30,15 @@ type Requirement = {
   provenance: Provenance | null;
 };
 
+/** One direct relationship of a model — a dataset, paper, or another model. */
+type LineageItem = {
+  id: string;
+  relationship_label: string;
+  related_type: string;
+  related_id: string;
+  related_name: string;
+};
+
 /**
  * A requirement after its pointer has been looked up. The database is always
  * preferred — it's the living record and may have been corrected since the
@@ -41,6 +50,8 @@ type Resolved = Requirement & {
   name: string | null;
   /** Pointer was present but the record couldn't be fetched. */
   pointerBroken: boolean;
+  /** Direct relationships only — one hop, never walked recursively. */
+  lineage: LineageItem[];
 };
 
 type ParseResult =
@@ -179,19 +190,35 @@ function parsePng(buffer: ArrayBuffer): ParseResult {
 
 async function resolveRequirements(reqs: Requirement[]): Promise<Resolved[]> {
   const ids = [...new Set(reqs.map((r) => r.provenance_id).filter(Boolean))] as string[];
-  const records = await Promise.all(
-    ids.map((id) =>
-      fetch(`/api/models/${id}`)
-        .then((r) => (r.ok ? r.json() : null))
-        .catch(() => null)
-    )
-  );
+
+  // Details and lineage are independent lookups — fetch them together rather
+  // than making the page wait for one and then the other.
+  const [records, lineages] = await Promise.all([
+    Promise.all(
+      ids.map((id) =>
+        fetch(`/api/models/${id}`)
+          .then((r) => (r.ok ? r.json() : null))
+          .catch(() => null)
+      )
+    ),
+    Promise.all(
+      ids.map((id) =>
+        fetch(`/api/models/${id}/lineage`)
+          .then((r) => (r.ok ? r.json() : []))
+          .catch(() => [])
+      )
+    ),
+  ]);
+
   const byId = new Map<string, Record<string, unknown>>();
+  const lineageById = new Map<string, LineageItem[]>();
   ids.forEach((id, i) => {
     if (records[i]) byId.set(id, records[i]);
+    if (Array.isArray(lineages[i])) lineageById.set(id, lineages[i]);
   });
 
   return reqs.map((r) => {
+    const lineage = r.provenance_id ? (lineageById.get(r.provenance_id) ?? []) : [];
     const db = r.provenance_id ? byId.get(r.provenance_id) : undefined;
 
     if (db) {
@@ -201,6 +228,7 @@ async function resolveRequirements(reqs: Requirement[]): Promise<Resolved[]> {
         name: (db.name as string) ?? null,
         vetting_status: (db.vetting_status as string) ?? r.vetting_status,
         pointerBroken: false,
+        lineage,
         data: {
           download_url: db.download_url as string | null,
           attribution: db.attribution as string | null,
@@ -219,6 +247,7 @@ async function resolveRequirements(reqs: Requirement[]): Promise<Resolved[]> {
       source: hasAny ? ('embedded' as const) : ('none' as const),
       name: null,
       pointerBroken: r.provenance_id !== null,
+      lineage,
       data: embedded,
     };
   });
@@ -325,6 +354,25 @@ function RequirementCard({ req }: { req: Resolved }) {
               <ProvenanceRow label="Training data">{data.data_provenance_notes}</ProvenanceRow>
             )}
           </dl>
+        )}
+
+        {/* Absent for most models — nothing to show rather than an empty state. */}
+        {req.lineage.length > 0 && (
+          <div className="mt-4 pt-3 border-t border-zinc-100">
+            <p className="text-xs font-semibold uppercase tracking-wide text-zinc-400 mb-2">
+              Lineage
+            </p>
+            <ul className="space-y-1.5">
+              {req.lineage.map((item) => (
+                <li key={item.id} className="text-sm">
+                  <span className="text-zinc-900">{item.related_name}</span>
+                  <span className="text-zinc-400"> ({item.related_type})</span>
+                  <span className="text-zinc-400"> — </span>
+                  <span className="text-zinc-600">{item.relationship_label}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
         )}
 
         <p className="mt-3 pt-3 border-t border-zinc-100 text-xs text-zinc-400">
@@ -530,6 +578,7 @@ export default function ImageInfoViewer() {
                             data: {},
                             name: null,
                             pointerBroken: false,
+                            lineage: [],
                           })
                         )
                     ).map((req, i) => (
