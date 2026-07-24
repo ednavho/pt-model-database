@@ -23,9 +23,9 @@ export const PSEUDO_SEED_NODE = 'PseudoSeed';
  * there's no type field to read.
  */
 export const PSEUDO_VARIABLE_CLASS_TYPES: Record<string, VarType> = {
-  PseudoVariableInt: 'int',
-  PseudoVariableFloat: 'float',
-  PseudoVariableString: 'string',
+  PseudoVarInt: 'int',
+  PseudoVarFloat: 'float',
+  PseudoVarString: 'string',
 };
 
 /** Marks a model selected from the provenance database. PLACEHOLDER. */
@@ -75,20 +75,17 @@ export const SNAPSHOT_SLOT_CAPABILITIES: Record<
 // Keys under a node's `inputs`. The wizard only accepts API-format
 // exports, so these are always names — never widget indices.
 
-/** CONFIRMED — the replaceable value is always `inputs.value`. */
-export const VALUE_FIELD = 'value';
-
 /**
- * UNCONFIRMED — where a Variable node carries the name the nerd typed.
- *
- * These input keys are tried in order; if none is present we fall back to
- * the node's title (`_meta.title` in API format). That fallback is not a
- * guess for its own sake: in the current hand-built workflows the name
- * genuinely does live in the title — PrimitiveFloat nodes titled
- * "MASK_SOFTNESS" and "ADHERENCE" are how variables are marked today. If
- * the real nodes expose a dedicated field, add its key to the front.
+ * The input key holding a node's editable value — the thing the wizard reads
+ * for a default and overwrites with a token on export. Confirmed nodes use
+ * `val` (PseudoVarFloat/Int/String); earlier placeholder fixtures used
+ * `value`. Tried in order, and the first key actually present on a node wins,
+ * so a mix of both across node types just works.
  */
-export const VARIABLE_NAME_INPUT_KEYS = ['name', 'variable_name', 'label'];
+export const VALUE_INPUT_KEYS = ['val', 'value'];
+
+// CONFIRMED — a Variable node's name is its title (`_meta.title` in API
+// format), whatever the nerd renamed the node to in ComfyUI.
 
 export const VETTED_LOADER_FIELDS = {
   id: 'id',

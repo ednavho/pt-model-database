@@ -15,8 +15,7 @@ import {
   SNAPSHOT_NODE_FIELDS,
   SNAPSHOT_SLOT_CAPABILITIES,
   TEMP_PATH_TOKEN,
-  VALUE_FIELD,
-  VARIABLE_NAME_INPUT_KEYS,
+  VALUE_INPUT_KEYS,
   VETTED_LOADER_FIELDS,
   tokenFromName,
   type VarType,
@@ -236,21 +235,31 @@ type Analysis = {
 // ── Detection ───────────────────────────────────────────────────────────────
 
 /**
- * The nerd-facing name of a Variable node. Tries the configured input keys,
- * then falls back to the node title — which is where names actually live in
- * the workflows built so far.
+ * The nerd-facing name of a Variable node. It lives in the node title
+ * (`_meta.title` in API format) — whatever the nerd renamed the node to in
+ * ComfyUI. `node.title` already resolves that, falling back to the class_type
+ * only when a node has no title at all.
  */
 function readVariableName(node: Node): string {
-  for (const key of VARIABLE_NAME_INPUT_KEYS) {
-    const v = node.get(key);
-    if (typeof v === 'string' && v.trim()) return v.trim();
-  }
   return node.title.trim();
+}
+
+/**
+ * The input key a node stores its editable value under. Returns the first
+ * candidate that holds a literal (skipping wired inputs, which are arrays);
+ * falls back to the first candidate as the write target when none is set.
+ */
+function valueKeyOf(node: Node): string {
+  for (const key of VALUE_INPUT_KEYS) {
+    const v = node.get(key);
+    if (v !== undefined && !Array.isArray(v) && typeof v !== 'object') return key;
+  }
+  return VALUE_INPUT_KEYS[0];
 }
 
 /** The nerd's test value from ComfyUI, used to pre-fill the wizard's default. */
 function readExistingValue(node: Node, type: VarType): string {
-  const v = node.get(VALUE_FIELD);
+  const v = node.get(valueKeyOf(node));
   if (v === null || v === undefined) return type === 'string' ? '' : '0';
   // A linked input is [nodeId, slot] — a wire, not a literal value.
   if (Array.isArray(v)) return type === 'string' ? '' : '0';
@@ -357,10 +366,10 @@ function buildWorkflowGraph(rawGraph: unknown, variables: DetectedVariable[]): u
   for (const node of nodes) {
     if (node.class_type in PSEUDO_VARIABLE_CLASS_TYPES) {
       const v = variables.find((x) => x.nodeId === node.id);
-      if (v) node.set(VALUE_FIELD, v.token);
+      if (v) node.set(valueKeyOf(node), v.token);
     } else if (node.class_type === PSEUDO_SEED_NODE) {
       // Every seed node gets the same token — the plugin drives one seed.
-      node.set(VALUE_FIELD, SEED_TOKEN);
+      node.set(valueKeyOf(node), SEED_TOKEN);
     } else if (node.class_type === PSEUDO_LOAD_MODEL_SNAPSHOT) {
       node.set(SNAPSHOT_NODE_FIELDS.path, TEMP_PATH_TOKEN);
     }
