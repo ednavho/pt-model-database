@@ -11,6 +11,7 @@ import {
   PSEUDO_VETTED_MODEL_LOADER,
   PSEUDO_UNPACK_MODEL_SNAPSHOT,
   PRESET_LOADER_CLASS_TYPES,
+  looksLikeModelLoader,
   SEED_TOKEN,
   SNAPSHOT_NODE_FIELDS,
   SNAPSHOT_SLOT_CAPABILITIES,
@@ -124,14 +125,19 @@ type DbModel = {
 };
 
 /**
- * A loader that picks models by preset label rather than filename, so the
- * scan can't name what it needs. Flagged for the nerd to resolve by hand.
+ * A loader node whose model the scan can't name — either because it picks by
+ * preset label ('preset') or because it just looks like a loader but exposes
+ * no filename we recognise ('loader'). Flagged so the nerd resolves it by hand
+ * rather than it slipping through invisibly.
  */
-type PresetLoader = {
+type UnseenLoader = {
   nodeId: string;
   nodeTitle: string;
   class_type: string;
+  kind: 'preset' | 'loader';
+  /** The preset label, when kind === 'preset'. */
   preset: string;
+  /** Categories the loader is known to pull; empty when unknown. */
   loads: string[];
   note: string;
 };
@@ -222,7 +228,7 @@ type Analysis = {
   nodeCount: number;
   dbModels: DbModel[];
   possibleModels: PossibleModel[];
-  presetLoaders: PresetLoader[];
+  unseenLoaders: UnseenLoader[];
   variables: DetectedVariable[];
   /** Node ids of every PseudoSeed. Surfaced as one seed concept, not one each. */
   seedNodeIds: string[];
@@ -306,20 +312,36 @@ function analyze(parsed: unknown): Analysis {
     }
   }
 
-  const presetLoaders: PresetLoader[] = nodes
-    .filter((n) => n.class_type in PRESET_LOADER_CLASS_TYPES)
-    .map((n) => {
+  // Node ids that already contributed a filename to the scan above — a loader
+  // that named its file doesn't need flagging.
+  const namedByScan = new Set(possibleModels.map((p) => p.nodeId));
+
+  const unseenLoaders: UnseenLoader[] = [];
+  for (const n of nodes) {
+    if (n.class_type in PRESET_LOADER_CLASS_TYPES) {
       const spec = PRESET_LOADER_CLASS_TYPES[n.class_type];
       const preset = n.get(spec.presetField);
-      return {
+      unseenLoaders.push({
         nodeId: n.id,
         nodeTitle: n.title,
         class_type: n.class_type,
+        kind: 'preset',
         preset: typeof preset === 'string' ? preset : '',
         loads: [...spec.loads],
         note: spec.note,
-      };
-    });
+      });
+    } else if (looksLikeModelLoader(n.class_type) && !namedByScan.has(n.id)) {
+      unseenLoaders.push({
+        nodeId: n.id,
+        nodeTitle: n.title,
+        class_type: n.class_type,
+        kind: 'loader',
+        preset: '',
+        loads: [],
+        note: 'Looks like a model loader, but no filename appears in the graph — add the model it loads by hand.',
+      });
+    }
+  }
 
   const variables: DetectedVariable[] = nodes
     .filter((n) => n.class_type in PSEUDO_VARIABLE_CLASS_TYPES)
@@ -345,7 +367,7 @@ function analyze(parsed: unknown): Analysis {
     nodeCount: nodes.length,
     dbModels,
     possibleModels,
-    presetLoaders,
+    unseenLoaders,
     variables,
     seedNodeIds: nodes.filter((n) => n.class_type === PSEUDO_SEED_NODE).map((n) => n.id),
     snapshotCount: nodes.filter((n) => n.class_type === PSEUDO_LOAD_MODEL_SNAPSHOT).length,
@@ -610,7 +632,7 @@ export default function WorkflowWizard() {
   const [nodeCount, setNodeCount] = useState(0);
   const [dbModels, setDbModels] = useState<DbModel[]>([]);
   const [possibleModels, setPossibleModels] = useState<PossibleModel[]>([]);
-  const [presetLoaders, setPresetLoaders] = useState<PresetLoader[]>([]);
+  const [unseenLoaders, setUnseenLoaders] = useState<UnseenLoader[]>([]);
   const [variables, setVariables] = useState<DetectedVariable[]>([]);
   const [seedNodeIds, setSeedNodeIds] = useState<string[]>([]);
   const [usesPseudocomfy, setUsesPseudocomfy] = useState(false);
@@ -690,7 +712,7 @@ export default function WorkflowWizard() {
       setNodeCount(a.nodeCount);
       setDbModels(a.dbModels);
       setPossibleModels(a.possibleModels);
-      setPresetLoaders(a.presetLoaders);
+      setUnseenLoaders(a.unseenLoaders);
       setVariables(a.variables);
       setSeedNodeIds(a.seedNodeIds);
       setUsesPseudocomfy(a.usesPseudocomfy);
@@ -1016,9 +1038,9 @@ export default function WorkflowWizard() {
               Parsed <strong>{nodeCount}</strong> nodes. Found{' '}
               <strong>{dbModels.length}</strong> database model(s),{' '}
               <strong>{possibleModels.length}</strong> possible model file(s),{' '}
-              {presetLoaders.length > 0 && (
+              {unseenLoaders.length > 0 && (
                 <>
-                  <strong>{presetLoaders.length}</strong> preset-based loader(s),{' '}
+                  <strong>{unseenLoaders.length}</strong> loader(s) the scan can&apos;t name,{' '}
                 </>
               )}
               <strong>{variables.length}</strong> variable(s) and{' '}
@@ -1145,40 +1167,51 @@ export default function WorkflowWizard() {
               hand.
             </p>
 
-            {presetLoaders.length > 0 && (
+            {unseenLoaders.length > 0 && (
               <div className="border border-amber-200 bg-amber-50 rounded-sm p-4 mb-4 space-y-3">
                 <div>
                   <p className="text-xs font-semibold text-amber-800">
                     Models the scan can&apos;t see
                   </p>
                   <p className="text-xs text-amber-800 mt-1">
-                    These nodes choose their models by preset name, so no filename appears anywhere
-                    in the workflow. They still need to be listed as requirements — add each one by
-                    hand below.
+                    These are loader nodes with no filename in the workflow — either they pick a
+                    model by preset name, or we don&apos;t recognise how they name it. They still
+                    need to be listed as requirements, so add each one by hand below.
                   </p>
                 </div>
-                {presetLoaders.map((pl) => (
-                  <div key={pl.nodeId} className="border border-amber-200 bg-white rounded-sm p-3">
+                {unseenLoaders.map((ul) => (
+                  <div key={ul.nodeId} className="border border-amber-200 bg-white rounded-sm p-3">
                     <p className="text-sm text-zinc-900">
-                      {pl.nodeTitle}{' '}
-                      <span className="text-xs text-zinc-400">· node {pl.nodeId}</span>
+                      {ul.nodeTitle}{' '}
+                      <span className="text-xs text-zinc-400">
+                        · node {ul.nodeId} · <code className="font-mono">{ul.class_type}</code>
+                      </span>
                     </p>
-                    {pl.preset && (
+                    {ul.preset && (
                       <p className="text-xs text-zinc-500 mt-0.5">
-                        preset: <code className="font-mono">{pl.preset}</code>
+                        preset: <code className="font-mono">{ul.preset}</code>
                       </p>
                     )}
-                    <p className="text-xs text-zinc-500 mt-1">{pl.note}</p>
+                    <p className="text-xs text-zinc-500 mt-1">{ul.note}</p>
                     <div className="flex flex-wrap gap-2 mt-2">
-                      {pl.loads.map((cat) => (
+                      {ul.loads.length > 0 ? (
+                        ul.loads.map((cat) => (
+                          <button
+                            key={cat}
+                            onClick={() => addManualModel(cat, `For ${ul.nodeTitle} (node ${ul.nodeId})`)}
+                            className="text-xs border border-zinc-300 rounded-sm px-2.5 py-1 text-zinc-700 bg-white hover:bg-zinc-50 transition-colors"
+                          >
+                            + Add {cat} model
+                          </button>
+                        ))
+                      ) : (
                         <button
-                          key={cat}
-                          onClick={() => addManualModel(cat, `For ${pl.nodeTitle} (node ${pl.nodeId})`)}
+                          onClick={() => addManualModel('checkpoints', `For ${ul.nodeTitle} (node ${ul.nodeId})`)}
                           className="text-xs border border-zinc-300 rounded-sm px-2.5 py-1 text-zinc-700 bg-white hover:bg-zinc-50 transition-colors"
                         >
-                          + Add {cat} model
+                          + Add the model this node loads
                         </button>
-                      ))}
+                      )}
                     </div>
                   </div>
                 ))}
@@ -1188,7 +1221,7 @@ export default function WorkflowWizard() {
             {possibleModels.length === 0 ? (
               <p className="text-sm text-zinc-400">
                 No model-shaped filenames found
-                {presetLoaders.length > 0 ? ' beyond the ones flagged above' : ''}. If this workflow
+                {unseenLoaders.length > 0 ? ' beyond the ones flagged above' : ''}. If this workflow
                 needs a model that isn&apos;t already listed, add it by hand.
               </p>
             ) : (

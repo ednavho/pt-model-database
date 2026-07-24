@@ -189,6 +189,27 @@ export const PRESET_LOADER_CLASS_TYPES: Record<
   },
 };
 
+/**
+ * A catch-all net under the named preset loaders above: by ComfyUI convention
+ * a node whose class_type contains "Loader" loads an asset off disk. Most
+ * expose a filename the scan already sees; the ones that don't (like the
+ * IPAdapter unified loaders) would otherwise vanish. So any loader-named node
+ * that yields no filename gets flagged too — a generic version of the same
+ * safety net, so an unfamiliar loader isn't silently dropped.
+ *
+ * These aren't loaders in the model sense and must not be flagged.
+ */
+const NON_MODEL_LOADER_CLASS_TYPES = new Set<string>([
+  PSEUDO_LOAD_MODEL_SNAPSHOT, // loads scene data from Rhino, not a model
+]);
+
+export function looksLikeModelLoader(classType: string): boolean {
+  if (NON_MODEL_LOADER_CLASS_TYPES.has(classType)) return false;
+  if (classType === PSEUDO_VETTED_MODEL_LOADER) return false; // handled via the DB
+  if (classType in PRESET_LOADER_CLASS_TYPES) return false; // handled richly above
+  return /loader/i.test(classType);
+}
+
 // ── Extension (custom_nodes) requirements ───────────────────────────
 //
 // ComfyUI's API export carries NO record of which extension a node came
