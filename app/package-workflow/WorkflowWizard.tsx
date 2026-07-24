@@ -9,9 +9,11 @@ import {
   PSEUDO_SEED_NODE,
   PSEUDO_VARIABLE_CLASS_TYPES,
   PSEUDO_VETTED_MODEL_LOADER,
+  PSEUDO_UNPACK_MODEL_SNAPSHOT,
   PRESET_LOADER_CLASS_TYPES,
   SEED_TOKEN,
   SNAPSHOT_NODE_FIELDS,
+  SNAPSHOT_SLOT_CAPABILITIES,
   TEMP_PATH_TOKEN,
   VALUE_FIELD,
   VARIABLE_NAME_INPUT_KEYS,
@@ -49,6 +51,8 @@ type Node = {
   get: (key: string) => unknown;
   set: (key: string, v: unknown) => void;
   strings: () => { field: string; value: string }[];
+  /** Wired inputs — a link is `[sourceNodeId, outputSlot]`. */
+  links: () => { field: string; source: string; slot: number }[];
 };
 
 function wrap(parsed: unknown): Node[] {
@@ -64,6 +68,12 @@ function wrap(parsed: unknown): Node[] {
     strings: () =>
       Object.entries(n.inputs ?? {}).flatMap(([k, v]) =>
         typeof v === 'string' ? [{ field: k, value: v }] : []
+      ),
+    links: () =>
+      Object.entries(n.inputs ?? {}).flatMap(([k, v]) =>
+        Array.isArray(v) && typeof v[1] === 'number'
+          ? [{ field: k, source: String(v[0]), slot: v[1] as number }]
+          : []
       ),
   }));
 }
@@ -165,6 +175,42 @@ type CapabilityFlags = {
   spatial_guidance_capabilities: { depth: boolean; edge: boolean };
 };
 
+function emptyCapabilities(): CapabilityFlags {
+  return {
+    global_guidance_capabilities: {
+      txt_scene: false,
+      txt_style: false,
+      txt_negative: false,
+      img_style: false,
+    },
+    regional_guidance_capabilities: { text: false, image: false },
+    spatial_guidance_capabilities: { depth: false, edge: false },
+  };
+}
+
+/**
+ * Ticks a capability box for every unpack-snapshot output slot the workflow
+ * actually wires somewhere. If the nerd routed env_scene (slot 3) into a node,
+ * they're using global txt_scene guidance — so we pre-check it rather than
+ * making them re-open ComfyUI to confirm what they already built.
+ */
+function detectCapabilities(nodes: Node[]): CapabilityFlags {
+  const caps = emptyCapabilities();
+  const unpack = nodes.find((n) => n.class_type === PSEUDO_UNPACK_MODEL_SNAPSHOT);
+  if (!unpack) return caps;
+
+  for (const node of nodes) {
+    for (const { source, slot } of node.links()) {
+      if (source !== unpack.id) continue;
+      const cap = SNAPSHOT_SLOT_CAPABILITIES[slot];
+      if (cap) {
+        (caps[cap.group as keyof CapabilityFlags] as Record<string, boolean>)[cap.key] = true;
+      }
+    }
+  }
+  return caps;
+}
+
 type WizardStep =
   | 'upload'
   | 'requirements'
@@ -183,6 +229,8 @@ type Analysis = {
   seedNodeIds: string[];
   snapshotCount: number;
   usesPseudocomfy: boolean;
+  /** Capability boxes to pre-check, read from how the snapshot is wired. */
+  detectedCaps: CapabilityFlags;
 };
 
 // ── Detection ───────────────────────────────────────────────────────────────
@@ -293,6 +341,7 @@ function analyze(parsed: unknown): Analysis {
     seedNodeIds: nodes.filter((n) => n.class_type === PSEUDO_SEED_NODE).map((n) => n.id),
     snapshotCount: nodes.filter((n) => n.class_type === PSEUDO_LOAD_MODEL_SNAPSHOT).length,
     usesPseudocomfy: nodes.some((n) => n.class_type.startsWith(PSEUDO_CLASS_TYPE_PREFIX)),
+    detectedCaps: detectCapabilities(nodes),
   };
 }
 
@@ -567,16 +616,10 @@ export default function WorkflowWizard() {
     author_url: '',
     license: '',
   });
-  const [caps, setCaps] = useState<CapabilityFlags>({
-    global_guidance_capabilities: {
-      txt_scene: false,
-      txt_style: false,
-      txt_negative: false,
-      img_style: false,
-    },
-    regional_guidance_capabilities: { text: false, image: false },
-    spatial_guidance_capabilities: { depth: false, edge: false },
-  });
+  const [caps, setCaps] = useState<CapabilityFlags>(emptyCapabilities);
+  // True once we pre-check boxes from the graph — surfaced to the nerd so they
+  // know why things are already ticked.
+  const [capsAutoDetected, setCapsAutoDetected] = useState(false);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const thumbInputRef = useRef<HTMLInputElement>(null);
@@ -642,6 +685,12 @@ export default function WorkflowWizard() {
       setVariables(a.variables);
       setSeedNodeIds(a.seedNodeIds);
       setUsesPseudocomfy(a.usesPseudocomfy);
+      setCaps(a.detectedCaps);
+      setCapsAutoDetected(
+        Object.values(a.detectedCaps).some((group) =>
+          Object.values(group as Record<string, boolean>).some(Boolean)
+        )
+      );
       setUploadWarnings(warnings);
     } catch (e) {
       setParseError(e instanceof Error ? e.message : 'Failed to parse JSON.');
@@ -1467,8 +1516,15 @@ export default function WorkflowWizard() {
           </div>
 
           <div className="border border-zinc-200 rounded-sm p-5 space-y-4">
-            <div className="font-semibold text-xs uppercase tracking-wide text-zinc-500">
-              Capability Flags
+            <div>
+              <div className="font-semibold text-xs uppercase tracking-wide text-zinc-500">
+                Capability Flags
+              </div>
+              <p className="text-xs text-zinc-400 mt-1">
+                {capsAutoDetected
+                  ? 'Pre-checked from how your workflow is wired — each box below is ticked because the matching snapshot output is connected in your ComfyUI graph. Adjust any that look wrong.'
+                  : 'These describe what kinds of guidance the workflow supports. We check them automatically from how the snapshot is wired, but none were detected here — tick whatever applies.'}
+              </p>
             </div>
 
             <CapabilityGroup
