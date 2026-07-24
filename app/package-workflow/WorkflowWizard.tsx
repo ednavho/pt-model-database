@@ -273,6 +273,39 @@ function readExistingValue(node: Node, type: VarType): string {
   return String(v);
 }
 
+/**
+ * Sensible starting min/max/step for a numeric variable, bracketing its
+ * detected default so the range actually contains it. A default of 5 becomes
+ * 0…10, not 0…1. These are just starting points the nerd can overwrite.
+ */
+function suggestRange(
+  defaultValue: string,
+  type: VarType
+): { min: string; max: string; step: string } {
+  const step = type === 'int' ? '1' : '0.05';
+  const d = Number(defaultValue);
+
+  // No usable default (empty, non-numeric) → generic range.
+  if (!Number.isFinite(d) || d === 0) {
+    return { min: '0', max: type === 'int' ? '10' : '1', step };
+  }
+
+  const round = (x: number) => (type === 'int' ? Math.round(x) : Number(x.toFixed(4)));
+
+  if (d > 0) {
+    // 0 … twice the default keeps the default comfortably inside the range.
+    return { min: '0', max: String(type === 'int' ? Math.ceil(d * 2) : round(d * 2)), step };
+  }
+
+  // Negative default (rare) → bracket it symmetrically around zero.
+  const bound = Math.abs(d) * 2;
+  return {
+    min: String(type === 'int' ? -Math.ceil(bound) : -round(bound)),
+    max: String(type === 'int' ? Math.ceil(bound) : round(bound)),
+    step,
+  };
+}
+
 function analyze(parsed: unknown): Analysis {
   const nodes = wrap(parsed);
 
@@ -349,6 +382,9 @@ function analyze(parsed: unknown): Analysis {
       // The matched class_type IS the type — there's no type field to read.
       const type = PSEUDO_VARIABLE_CLASS_TYPES[n.class_type];
       const name = readVariableName(n);
+      const defaultValue = readExistingValue(n, type);
+      // Bracket the range around the default so it isn't left outside it.
+      const { min, max, step } = suggestRange(defaultValue, type);
       return {
         nodeId: n.id,
         class_type: n.class_type,
@@ -356,10 +392,10 @@ function analyze(parsed: unknown): Analysis {
         name,
         description: '',
         type,
-        default: readExistingValue(n, type),
-        min: '0',
-        max: '1',
-        step: type === 'int' ? '1' : '0.05',
+        default: defaultValue,
+        min,
+        max,
+        step,
       };
     });
 
