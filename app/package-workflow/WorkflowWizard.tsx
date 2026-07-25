@@ -8,7 +8,7 @@ import {
   PSEUDO_LOAD_MODEL_SNAPSHOT,
   PSEUDO_SEED_NODE,
   PSEUDO_VARIABLE_CLASS_TYPES,
-  PSEUDO_VETTED_MODEL_LOADER,
+  VETTED_LOADER_CLASS_TYPES,
   PSEUDO_UNPACK_MODEL_SNAPSHOT,
   PRESET_LOADER_CLASS_TYPES,
   looksLikeModelLoader,
@@ -17,7 +17,6 @@ import {
   SNAPSHOT_SLOT_CAPABILITIES,
   TEMP_PATH_TOKEN,
   VALUE_INPUT_KEYS,
-  VETTED_LOADER_FIELDS,
   tokenFromName,
   type VarType,
 } from '@/config/pseudoNodeTypes';
@@ -310,15 +309,18 @@ function analyze(parsed: unknown): Analysis {
   const nodes = wrap(parsed);
 
   const dbModels: DbModel[] = nodes
-    .filter((n) => n.class_type === PSEUDO_VETTED_MODEL_LOADER)
-    .map((n) => ({
-      nodeId: n.id,
-      provenanceId: String(n.get(VETTED_LOADER_FIELDS.id) ?? ''),
-      nameLocal: String(n.get(VETTED_LOADER_FIELDS.name_local) ?? ''),
-      fileNameLocal: String(n.get(VETTED_LOADER_FIELDS.filename_local) ?? ''),
-      categoryLocal: String(n.get(VETTED_LOADER_FIELDS.category_local) ?? ''),
-      dbMatch: null,
-    }));
+    .filter((n) => n.class_type in VETTED_LOADER_CLASS_TYPES)
+    .map((n) => {
+      const spec = VETTED_LOADER_CLASS_TYPES[n.class_type];
+      return {
+        nodeId: n.id,
+        provenanceId: '',
+        nameLocal: '',
+        fileNameLocal: String(n.get(spec.filenameField) ?? ''),
+        categoryLocal: spec.category,
+        dbMatch: null,
+      };
+    });
 
   // Filenames already accounted for by a vetted loader shouldn't reappear
   // in the speculative scan.
@@ -327,7 +329,7 @@ function analyze(parsed: unknown): Analysis {
   const possibleModels: PossibleModel[] = [];
   const seenFiles = new Set<string>();
   for (const node of nodes) {
-    if (node.class_type === PSEUDO_VETTED_MODEL_LOADER) continue;
+    if (node.class_type in VETTED_LOADER_CLASS_TYPES) continue;
     for (const { field, value } of node.strings()) {
       const lower = value.toLowerCase();
       if (!MODEL_FILE_EXTENSIONS.some((ext) => lower.endsWith(ext))) continue;
@@ -786,15 +788,19 @@ export default function WorkflowWizard() {
     if (!rawGraph) return;
     setMatchLoading(true);
     try {
-      const ids = [...new Set(dbModels.map((m) => m.provenanceId).filter(Boolean))];
+      const filenames = [...new Set(dbModels.map((m) => m.fileNameLocal).filter(Boolean))];
       const results = await Promise.all(
-        ids.map((id) => fetch(`/api/models/${id}`).then((r) => (r.ok ? r.json() : null)))
+        filenames.map((fn) =>
+          fetch(`/api/models/by-filename/${encodeURIComponent(fn)}`).then((r) =>
+            r.ok ? r.json() : null
+          )
+        )
       );
-      const byId = new Map<string, ModelDetail>(
-        (results.filter(Boolean) as ModelDetail[]).map((d) => [d.id, d])
+      const byFilename = new Map<string, ModelDetail>(
+        (results.filter(Boolean) as ModelDetail[]).map((d) => [d.file_name, d])
       );
       setDbModels((prev) =>
-        prev.map((m) => ({ ...m, dbMatch: byId.get(m.provenanceId) ?? null }))
+        prev.map((m) => ({ ...m, dbMatch: byFilename.get(m.fileNameLocal) ?? null }))
       );
     } finally {
       setMatchLoading(false);
@@ -1104,13 +1110,13 @@ export default function WorkflowWizard() {
               Models From The Database
             </div>
             <p className="text-xs text-zinc-400 mb-4">
-              Picked in ComfyUI via {PSEUDO_VETTED_MODEL_LOADER}. Provenance comes from the
+              Picked in ComfyUI via a vetted model loader node. Provenance comes from the
               database record.
             </p>
 
             {dbModels.length === 0 ? (
               <p className="text-sm text-zinc-400">
-                No {PSEUDO_VETTED_MODEL_LOADER} nodes in this workflow. Any models it uses will
+                No vetted model loader nodes in this workflow. Any models it uses will
                 show up on the next step.
               </p>
             ) : (
@@ -1151,11 +1157,9 @@ export default function WorkflowWizard() {
                     ) : (
                       <div className="border border-amber-200 bg-amber-50 rounded-sm px-3 py-2">
                         <p className="text-xs text-amber-800">
-                          The node points at{' '}
-                          <code className="font-mono">{m.provenanceId || '(no id)'}</code>, but
-                          that record isn&apos;t in the database right now. The workflow will fall
-                          back to the node&apos;s local values:{' '}
-                          <strong>{m.fileNameLocal || '—'}</strong> ({m.categoryLocal || '—'}).
+                          <strong>{m.fileNameLocal || '—'}</strong> wasn&apos;t found in the
+                          database. Check that the filename matches a record, or add the provenance
+                          manually on the next step.
                         </p>
                       </div>
                     )}

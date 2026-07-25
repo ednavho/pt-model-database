@@ -28,8 +28,17 @@ export const PSEUDO_VARIABLE_CLASS_TYPES: Record<string, VarType> = {
   PseudoVarString: 'string',
 };
 
-/** Marks a model selected from the provenance database. PLACEHOLDER. */
-export const PSEUDO_VETTED_MODEL_LOADER = 'PseudoVettedModelLoader';
+/**
+ * Per-type vetted model loaders. Each entry maps the class_type to the input
+ * field that carries the model name and the ComfyUI category it loads into.
+ * Add a new entry here when Kyle ships a new loader type.
+ */
+export const VETTED_LOADER_CLASS_TYPES: Record<
+  string,
+  { filenameField: string; category: ComfyModelFolder }
+> = {
+  PseudoVettedCheckpointLoader: { filenameField: 'model', category: 'checkpoints' },
+};
 
 /** CONFIRMED — appears in shipped workflows carrying a real local path. */
 export const PSEUDO_LOAD_MODEL_SNAPSHOT = 'PseudoLoadModelSnapshot';
@@ -87,12 +96,6 @@ export const VALUE_INPUT_KEYS = ['val', 'value'];
 // CONFIRMED — a Variable node's name is its title (`_meta.title` in API
 // format), whatever the nerd renamed the node to in ComfyUI.
 
-export const VETTED_LOADER_FIELDS = {
-  id: 'id',
-  name_local: 'name_local',
-  filename_local: 'filename_local',
-  category_local: 'category_local',
-};
 
 export const SNAPSHOT_NODE_FIELDS = {
   // CONFIRMED — holds an absolute local path pre-export.
@@ -205,7 +208,7 @@ const NON_MODEL_LOADER_CLASS_TYPES = new Set<string>([
 
 export function looksLikeModelLoader(classType: string): boolean {
   if (NON_MODEL_LOADER_CLASS_TYPES.has(classType)) return false;
-  if (classType === PSEUDO_VETTED_MODEL_LOADER) return false; // handled via the DB
+  if (classType in VETTED_LOADER_CLASS_TYPES) return false; // handled via the DB
   if (classType in PRESET_LOADER_CLASS_TYPES) return false; // handled richly above
   return /loader/i.test(classType);
 }
