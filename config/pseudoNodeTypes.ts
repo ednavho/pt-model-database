@@ -37,7 +37,11 @@ export const VETTED_LOADER_CLASS_TYPES: Record<
   string,
   { filenameField: string; category: ComfyModelFolder }
 > = {
-  PseudoVettedCheckpointLoader: { filenameField: 'model', category: 'checkpoints' },
+  PseudoVettedCheckpointLoader:  { filenameField: 'model', category: 'checkpoints' },
+  PseudoVettedControlNetLoader:  { filenameField: 'model', category: 'controlnet' },
+  PseudoVettedLoraLoader:        { filenameField: 'model', category: 'loras' },
+  PseudoVettedClipVisionLoader:  { filenameField: 'model', category: 'clip_vision' },
+  PseudoVettedVaeLoader:         { filenameField: 'model', category: 'vae' },
 };
 
 /** CONFIRMED — appears in shipped workflows carrying a real local path. */
