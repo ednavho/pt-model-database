@@ -118,6 +118,7 @@ type DbModel = {
   nodeId: string;
   provenanceId: string;
   nameLocal: string;
+  modelIdLocal: string;
   fileNameLocal: string;
   categoryLocal: string;
   dbMatch: ModelDetail | null;
@@ -316,6 +317,7 @@ function analyze(parsed: unknown): Analysis {
         nodeId: n.id,
         provenanceId: '',
         nameLocal: '',
+        modelIdLocal: String(n.get('model_id') ?? ''),
         fileNameLocal: String(n.get(spec.filenameField) ?? ''),
         categoryLocal: spec.category,
         dbMatch: null,
@@ -788,20 +790,29 @@ export default function WorkflowWizard() {
     if (!rawGraph) return;
     setMatchLoading(true);
     try {
-      const filenames = [...new Set(dbModels.map((m) => m.fileNameLocal).filter(Boolean))];
-      const results = await Promise.all(
-        filenames.map((fn) =>
-          fetch(`/api/models/by-filename/${encodeURIComponent(fn)}`).then((r) =>
-            r.ok ? r.json() : null
-          )
-        )
+      // Look up each model: by ID first (authoritative), filename as fallback.
+      const updatedDbModels = await Promise.all(
+        dbModels.map(async (m) => {
+          // Try model_id first
+          if (m.modelIdLocal) {
+            const r = await fetch(`/api/models/${encodeURIComponent(m.modelIdLocal)}`);
+            if (r.ok) {
+              const d: ModelDetail = await r.json();
+              return { ...m, dbMatch: d };
+            }
+          }
+          // Fall back to filename
+          if (m.fileNameLocal) {
+            const r = await fetch(`/api/models/by-filename/${encodeURIComponent(m.fileNameLocal)}`);
+            if (r.ok) {
+              const d: ModelDetail = await r.json();
+              return { ...m, dbMatch: d };
+            }
+          }
+          return { ...m, dbMatch: null };
+        })
       );
-      const byFilename = new Map<string, ModelDetail>(
-        (results.filter(Boolean) as ModelDetail[]).map((d) => [d.file_name, d])
-      );
-      setDbModels((prev) =>
-        prev.map((m) => ({ ...m, dbMatch: byFilename.get(m.fileNameLocal) ?? null }))
-      );
+      setDbModels(updatedDbModels);
     } finally {
       setMatchLoading(false);
     }

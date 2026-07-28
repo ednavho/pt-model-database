@@ -40,6 +40,7 @@ export const VETTED_LOADER_CLASS_TYPES: Record<
   PseudoVettedCheckpointLoader:  { filenameField: 'model', category: 'checkpoints' },
   PseudoVettedControlNetLoader:  { filenameField: 'model', category: 'controlnet' },
   PseudoVettedLoraLoader:        { filenameField: 'model', category: 'loras' },
+  PseudoVettedClipLoader:        { filenameField: 'model', category: 'clip' },
   PseudoVettedClipVisionLoader:  { filenameField: 'model', category: 'clip_vision' },
   PseudoVettedVaeLoader:         { filenameField: 'model', category: 'vae' },
 };

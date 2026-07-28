@@ -26,7 +26,7 @@ export default function VettingBadge({ status, className }: VettingBadgeProps) {
   return (
     <span
       className={cn(
-        'inline-flex items-center px-2 py-0.5 text-xs border rounded-sm font-medium',
+        'inline-flex items-center px-2 py-0.5 text-xs border rounded-[8px] font-medium',
         config.classes,
         className
       )}
