@@ -38,8 +38,8 @@ export default function Navbar() {
   const internal = isInternalUser(user?.email);
 
   return (
-    <nav className="w-full border-b border-zinc-200 bg-white">
-      <div className="max-w-6xl mx-auto px-4 md:px-6 h-14 flex items-center justify-between">
+    <nav className="w-full bg-white">
+      <div className="px-6 h-14 flex items-center justify-between">
         <Link
           href="/"
           className="flex items-center gap-2 text-zinc-900 hover:text-zinc-600"
