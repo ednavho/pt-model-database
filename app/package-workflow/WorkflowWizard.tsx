@@ -23,7 +23,8 @@ import {
 import JsonTree from '@/components/ui/JsonTree';
 import { ModelDetail } from '@/types/database';
 import { cn } from '@/utils/cn';
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useRouter } from 'next/navigation';
 
 // ── Graph shape ─────────────────────────────────────────────────────────────
 //
@@ -97,6 +98,8 @@ function looksLikeApiExport(parsed: unknown): boolean {
 
 // ── Wizard state types ──────────────────────────────────────────────────────
 
+type AlertMessage = { title: string; message: string };
+
 type ManualProvenance = {
   download_url: string;
   attribution: string;
@@ -116,6 +119,7 @@ const emptyProvenance: ManualProvenance = {
 /** A model the nerd picked via PseudoVettedModelLoader — authoritative. */
 type DbModel = {
   nodeId: string;
+  class_type: string;
   provenanceId: string;
   nameLocal: string;
   modelIdLocal: string;
@@ -151,6 +155,7 @@ type PossibleModel = {
   category: string;
   selected: boolean;
   provenance: ManualProvenance;
+  forLoaderNodeId?: string | null;
 };
 
 type DetectedVariable = {
@@ -315,6 +320,7 @@ function analyze(parsed: unknown): Analysis {
       const spec = VETTED_LOADER_CLASS_TYPES[n.class_type];
       return {
         nodeId: n.id,
+        class_type: n.class_type,
         provenanceId: '',
         nameLocal: '',
         modelIdLocal: String(n.get('model_id') ?? ''),
@@ -559,44 +565,118 @@ function CapabilityGroup({
 
 const STEPS: { key: WizardStep; label: string }[] = [
   { key: 'upload', label: 'Upload' },
-  { key: 'requirements', label: 'Models' },
+  { key: 'requirements', label: 'Database Models' },
   { key: 'possible-models', label: 'Other Models' },
   { key: 'variables', label: 'Variables' },
   { key: 'metadata', label: 'Metadata' },
   { key: 'preview', label: 'Preview' },
 ];
 
-function StepIndicator({ current }: { current: WizardStep }) {
-  const currentIdx = STEPS.findIndex((s) => s.key === current);
+function UploadAlert({ kind, title, message }: { kind: 'warning' | 'error'; title: string; message: string }) {
   return (
-    <div className="flex items-center gap-0 mb-8">
-      {STEPS.map((step, i) => (
-        <div key={step.key} className="flex items-center">
-          <div
-            className={cn(
-              'w-6 h-6 rounded-full border flex items-center justify-center text-xs font-semibold',
-              i < currentIdx
-                ? 'bg-zinc-900 border-zinc-900 text-white'
-                : i === currentIdx
-                ? 'border-zinc-900 text-zinc-900'
-                : 'border-zinc-200 text-zinc-300'
-            )}
-          >
-            {i + 1}
-          </div>
-          <span
-            className={cn(
-              'ml-2 text-xs',
-              i === currentIdx ? 'text-zinc-900 font-medium' : 'text-zinc-400'
-            )}
-          >
-            {step.label}
-          </span>
-          {i < STEPS.length - 1 && (
-            <div className={cn('mx-2 h-px w-8', i < currentIdx ? 'bg-zinc-900' : 'bg-zinc-200')} />
-          )}
-        </div>
-      ))}
+    <div className={cn(
+      'flex items-center gap-3 rounded-[8px] px-4 py-3 border',
+      kind === 'error'
+        ? 'bg-[#FFF5F5] border-[#FECACA]'
+        : 'bg-[#FFFBEB] border-[#FDE68A]'
+    )}>
+      <div className="shrink-0">
+        {kind === 'error' ? (
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
+            <circle cx="12" cy="12" r="9" stroke="#DC2626" strokeWidth="1.5" />
+            <path d="M12 8v5" stroke="#DC2626" strokeWidth="1.5" strokeLinecap="round" />
+            <circle cx="12" cy="16.5" r="0.75" fill="#DC2626" />
+          </svg>
+        ) : (
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
+            <path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" stroke="#D97706" strokeWidth="1.5" strokeLinejoin="round" />
+            <path d="M12 9v4" stroke="#D97706" strokeWidth="1.5" strokeLinecap="round" />
+            <circle cx="12" cy="17" r="0.75" fill="#D97706" />
+          </svg>
+        )}
+      </div>
+      <div>
+        <p className={cn('text-[13px] font-semibold', kind === 'error' ? 'text-[#DC2626]' : 'text-amber-800')}>
+          {title}
+        </p>
+        <p className={cn('text-[13px] mt-0.5', kind === 'error' ? 'text-[#DC2626]' : 'text-amber-800')}>
+          {message}
+        </p>
+      </div>
+    </div>
+  );
+}
+
+function HamburgerIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+      <path d="M3 6h18M3 12h18M3 18h18" />
+    </svg>
+  );
+}
+
+function CodePreview({ code }: { code: string }) {
+  const lines = code.split('\n');
+  return (
+    <div className="flex font-mono text-[11px] leading-[18px]">
+      <div className="select-none text-right pr-4 pl-4 pt-4 pb-4 text-[#C8C8C8]" style={{ minWidth: '3rem' }}>
+        {lines.map((_, i) => <div key={i}>{i + 1}</div>)}
+      </div>
+      <pre className="flex-1 text-[#666] pt-4 pb-4 pr-4 whitespace-pre overflow-x-auto">{code}</pre>
+    </div>
+  );
+}
+
+const CARD_INPUT = 'w-full border border-[#E9E9E9] rounded-[8px] px-3 py-2 text-[13px] outline-none focus:border-[#B0B0B0] bg-white';
+const CARD_LABEL = 'block text-[12px] text-[#939393] mb-1';
+const META_INPUT = 'w-full border-b border-[#E9E9E9] py-1.5 text-[13px] outline-none focus:border-b-black bg-transparent';
+const META_LABEL = 'block text-[12px] text-[#939393] mb-1';
+
+const LOADER_CAT_LABELS: Record<string, string> = {
+  checkpoints: 'Checkpoint',
+  controlnet: 'ControlNet',
+  loras: 'LoRA',
+  clip_vision: 'Clip Vision',
+  ipadapter: 'IPAdapter',
+};
+
+const CAP_LABELS: Record<string, { name: string; type?: string }> = {
+  txt_scene: { name: 'Scene', type: 'text' },
+  txt_style: { name: 'Style', type: 'text' },
+  txt_negative: { name: 'Negative', type: 'text' },
+  img_style: { name: 'Style', type: 'image' },
+  text: { name: 'Text' },
+  image: { name: 'Image' },
+  depth: { name: 'Depth' },
+  edge: { name: 'Edge' },
+};
+
+function StatusBadge({ status }: { status: string }) {
+  const s = status.toLowerCase();
+  const cls =
+    s === 'vetted' ? 'bg-green-50 text-green-700 border-green-200'
+    : s === 'potentially_problematic' ? 'bg-orange-50 text-orange-700 border-orange-200'
+    : 'bg-red-50 text-red-700 border-red-200';
+  const label =
+    s === 'vetted' ? 'Vetted'
+    : s === 'potentially_problematic' ? 'Potentially Problematic'
+    : 'Unknown';
+  return (
+    <span className={cn('inline-flex items-center px-2 py-0.5 text-[11px] border rounded-[8px] font-medium', cls)}>
+      {label}
+    </span>
+  );
+}
+
+function SelectInput({ className, ...props }: React.SelectHTMLAttributes<HTMLSelectElement> & { className?: string }) {
+  return (
+    <div className="relative">
+      <select className={cn(className, 'appearance-none pr-8')} {...props} />
+      <div className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-[#939393]">
+        <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M2.5 4.5L6 8L9.5 4.5" />
+        </svg>
+      </div>
     </div>
   );
 }
@@ -659,6 +739,32 @@ function ProvenanceFields({
   );
 }
 
+// ── Diff ────────────────────────────────────────────────────────────────────
+
+type DiffLine = { type: 'same' | 'add' | 'remove'; text: string };
+
+function computeDiff(oldText: string, newText: string): DiffLine[] {
+  const a = oldText.split('\n');
+  const b = newText.split('\n');
+  const m = a.length, n = b.length;
+  const dp: number[][] = Array.from({ length: m + 1 }, () => new Array(n + 1).fill(0));
+  for (let i = 1; i <= m; i++)
+    for (let j = 1; j <= n; j++)
+      dp[i][j] = a[i-1] === b[j-1] ? dp[i-1][j-1] + 1 : Math.max(dp[i-1][j], dp[i][j-1]);
+  const result: DiffLine[] = [];
+  let i = m, j = n;
+  while (i > 0 || j > 0) {
+    if (i > 0 && j > 0 && a[i-1] === b[j-1]) {
+      result.unshift({ type: 'same', text: a[i-1] }); i--; j--;
+    } else if (j > 0 && (i === 0 || dp[i][j-1] >= dp[i-1][j])) {
+      result.unshift({ type: 'add', text: b[j-1] }); j--;
+    } else {
+      result.unshift({ type: 'remove', text: a[i-1] }); i--;
+    }
+  }
+  return result;
+}
+
 // ── Main wizard ─────────────────────────────────────────────────────────────
 
 export default function WorkflowWizard() {
@@ -666,8 +772,8 @@ export default function WorkflowWizard() {
   const [rawGraph, setRawGraph] = useState<unknown>(null);
   const [uploadedFileName, setUploadedFileName] = useState('');
   const [parseError, setParseError] = useState<string | null>(null);
-  const [blockingError, setBlockingError] = useState<string | null>(null);
-  const [uploadWarnings, setUploadWarnings] = useState<string[]>([]);
+  const [blockingError, setBlockingError] = useState<AlertMessage | null>(null);
+  const [uploadWarnings, setUploadWarnings] = useState<AlertMessage[]>([]);
 
   const [nodeCount, setNodeCount] = useState(0);
   const [dbModels, setDbModels] = useState<DbModel[]>([]);
@@ -692,9 +798,32 @@ export default function WorkflowWizard() {
   // know why things are already ticked.
   const [capsAutoDetected, setCapsAutoDetected] = useState(false);
 
+  const router = useRouter();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const thumbInputRef = useRef<HTMLInputElement>(null);
   const [isDragging, setIsDragging] = useState(false);
+
+  const [rightPanelWidth, setRightPanelWidth] = useState(380);
+  const [panelMinimized, setPanelMinimized] = useState(false);
+  const panelDragRef = useRef<{ startX: number; startWidth: number } | null>(null);
+  const baselineRef = useRef<string | null>(null);
+
+  const handlePanelDragStart = (e: React.MouseEvent) => {
+    e.preventDefault();
+    panelDragRef.current = { startX: e.clientX, startWidth: rightPanelWidth };
+    const onMove = (ev: MouseEvent) => {
+      if (!panelDragRef.current) return;
+      const delta = panelDragRef.current.startX - ev.clientX;
+      setRightPanelWidth(Math.max(200, Math.min(700, panelDragRef.current.startWidth + delta)));
+    };
+    const onUp = () => {
+      panelDragRef.current = null;
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+    };
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  };
 
   // ── Step 1: Upload ────────────────────────────────────────────────────────
 
@@ -712,15 +841,17 @@ export default function WorkflowWizard() {
       }
 
       if (looksLikeCanvasExport(parsed)) {
-        setBlockingError(
-          'This is a canvas export — the file ComfyUI saves so you can keep editing the workflow. It records node positions and wiring, but not the runnable graph, so a workflow packaged from it would never render. In ComfyUI use Workflow → Export (API) instead, then upload that file.'
-        );
+        setBlockingError({
+          title: 'Invalid File',
+          message: 'Canvas export detected. Use Workflow → Export (API) in ComfyUI.',
+        });
         return;
       }
       if (!looksLikeApiExport(parsed)) {
-        setBlockingError(
-          "This doesn't look like a ComfyUI API export. Expected a JSON object mapping node ids to nodes, each with a class_type. In ComfyUI use Workflow → Export (API)."
-        );
+        setBlockingError({
+          title: 'Invalid File',
+          message: 'Not a ComfyUI API export. Use Workflow → Export (API) in ComfyUI.',
+        });
         return;
       }
 
@@ -729,22 +860,25 @@ export default function WorkflowWizard() {
       // Without a snapshot loader the workflow can't receive scene data from
       // Rhino, so it could never render. That's the only hard stop.
       if (a.snapshotCount === 0) {
-        setBlockingError(
-          `No ${PSEUDO_LOAD_MODEL_SNAPSHOT} node found. It's what receives the scene data from Rhino at render time, so the workflow can't run without it. Add one in ComfyUI and re-upload.`
-        );
+        setBlockingError({
+          title: 'Missing Node',
+          message: `No ${PSEUDO_LOAD_MODEL_SNAPSHOT} node found.`,
+        });
         return;
       }
 
-      const warnings: string[] = [];
+      const warnings: AlertMessage[] = [];
       if (a.snapshotCount > 1) {
-        warnings.push(
-          `Found ${a.snapshotCount} ${PSEUDO_LOAD_MODEL_SNAPSHOT} nodes, but there should be exactly one. Only one will receive scene data — remove the extras.`
-        );
+        warnings.push({
+          title: 'Warning',
+          message: `Found ${a.snapshotCount} ${PSEUDO_LOAD_MODEL_SNAPSHOT} nodes, expected 1.`,
+        });
       }
       if (a.seedNodeIds.length === 0) {
-        warnings.push(
-          `No ${PSEUDO_SEED_NODE} node found. The workflow will still render, but the seed is fixed at whatever the graph already holds — nobody using it in the plugin will be able to reroll and get a different image.`
-        );
+        warnings.push({
+          title: 'Missing Node',
+          message: `No ${PSEUDO_SEED_NODE} node found.`,
+        });
       }
       // Zero Variable nodes is normal — it just means nothing is adjustable.
 
@@ -843,17 +977,18 @@ export default function WorkflowWizard() {
     );
   };
 
-  const addManualModel = (category = 'checkpoints', label = 'Added by hand') => {
+  const addManualModel = (category = 'checkpoints', forLoaderNodeId: string | null = null) => {
     setPossibleModels((prev) => [
       ...prev,
       {
         key: `manual:${Date.now()}:${Math.random().toString(36).slice(2, 7)}`,
         nodeId: null,
-        nodeTitle: label,
+        nodeTitle: '',
         fileName: '',
         category,
         selected: true,
         provenance: { ...emptyProvenance },
+        forLoaderNodeId,
       },
     ]);
   };
@@ -993,6 +1128,30 @@ export default function WorkflowWizard() {
     };
   };
 
+  // Capture baseline output the first time a file is loaded (before the user fills any fields)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (rawGraph !== null && baselineRef.current === null) {
+      baselineRef.current = JSON.stringify(buildOutput(), null, 2);
+    }
+  }, [rawGraph]);
+
+  const currentOutputStr = useMemo(
+    () => rawGraph !== null ? JSON.stringify(buildOutput(), null, 2) : '',
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [workflowName, description, thumbnailDataUri, attribution, caps, variables, dbModels, possibleModels, rawGraph, usesPseudocomfy]
+  );
+
+  const diffResult = useMemo(
+    () => baselineRef.current ? computeDiff(baselineRef.current, currentOutputStr) : null,
+    [currentOutputStr]
+  );
+
+  const diffAdded = useMemo(() => diffResult?.filter(l => l.type === 'add').length ?? 0, [diffResult]);
+  const diffRemoved = useMemo(() => diffResult?.filter(l => l.type === 'remove').length ?? 0, [diffResult]);
+
+  const outputFileName = `${(workflowName || uploadedFileName?.replace(/\.json$/, '') || 'workflow').replace(/\s+/g, '_').toLowerCase()}.pseudorandom.json`;
+
   const downloadOutput = () => {
     const errors = validateVariables(variables);
     if (errors.length > 0) {
@@ -1012,688 +1171,613 @@ export default function WorkflowWizard() {
   };
 
   const selectedCount = possibleModels.filter((p) => p.selected).length;
+  const currentIdx = STEPS.findIndex((s) => s.key === step);
+
+  const resetUpload = useCallback(() => {
+    setUploadedFileName('');
+    setRawGraph(null);
+    setParseError(null);
+    setBlockingError(null);
+    setUploadWarnings([]);
+    setNodeCount(0);
+    setDbModels([]);
+    setPossibleModels([]);
+    setUnseenLoaders([]);
+    setVariables([]);
+    setSeedNodeIds([]);
+  }, []);
 
   // ── Render ────────────────────────────────────────────────────────────────
 
   return (
-    <div>
-      <StepIndicator current={step} />
+    <div className="flex flex-col h-[calc(100dvh-3.5rem)]">
+      {/* Full-width Workflow Converter title */}
+      <div className="shrink-0 px-6 pt-8 pb-4">
+        <p className="text-[13px] font-semibold text-black">Workflow Converter</p>
+      </div>
+
+      {/* Three-column row — all top-aligned */}
+      <div className="flex flex-1 min-h-0 overflow-hidden pt-4">
+
+      {/* Left sidebar */}
+      <aside className="w-[200px] shrink-0 px-6 pt-4 pb-8 overflow-y-auto">
+        <div className="space-y-4">
+          {STEPS.map((s, i) => {
+            const completed = i < currentIdx;
+            return (
+              <div
+                key={s.key}
+                className={cn('flex items-center gap-3', completed && 'cursor-pointer hover:opacity-60 transition-opacity')}
+                onClick={completed ? () => setStep(s.key) : undefined}
+                role={completed ? 'button' : undefined}
+                tabIndex={completed ? 0 : undefined}
+                onKeyDown={completed ? (e) => e.key === 'Enter' && setStep(s.key) : undefined}
+              >
+                <div className={cn(
+                  'w-6 h-6 rounded-full border flex items-center justify-center text-[11px] font-semibold shrink-0',
+                  completed
+                    ? 'bg-black border-black text-white'
+                    : i === currentIdx
+                    ? 'border-black text-black'
+                    : 'border-[#D4D4D4] text-[#B0B0B0]'
+                )}>
+                  {i + 1}
+                </div>
+                <span className={cn(
+                  'text-[13px]',
+                  i === currentIdx ? 'text-black font-medium' : completed ? 'text-black' : 'text-[#939393]'
+                )}>
+                  {s.label}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      </aside>
+
+      {/* Content area */}
+      <div className="flex flex-1 min-w-0 overflow-hidden">
+        {/* Main content column */}
+        <div className="relative flex flex-col flex-1 min-w-0 overflow-hidden">
+        {/* Scrollable content */}
+        <div className={step === 'preview' ? 'flex-1 overflow-hidden flex flex-col min-h-0' : 'flex-1 overflow-y-auto'}>
+          <div className={step === 'preview' ? 'flex-1 flex flex-col min-h-0 px-10 max-w-[800px]' : 'px-10 pb-[100px] max-w-[800px]'}>
 
       {/* ── Step 1: Upload ─────────────────────────────────────────────── */}
       {step === 'upload' && (
-        <div className="space-y-6">
+        <div>
+          {/* Drop zone */}
           <div
-            onDragOver={(e) => {
-              e.preventDefault();
-              setIsDragging(true);
-            }}
+            onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
             onDragLeave={() => setIsDragging(false)}
             onDrop={handleDrop}
             onClick={() => fileInputRef.current?.click()}
             className={cn(
-              'border-2 border-dashed rounded-sm p-12 text-center cursor-pointer transition-colors',
-              isDragging ? 'border-zinc-400 bg-zinc-50' : 'border-zinc-200 hover:border-zinc-300'
+              'border border-dashed rounded-[8px] cursor-pointer transition-colors flex items-center justify-center min-h-[280px]',
+              isDragging ? 'border-[#B0B0B0] bg-zinc-50' : 'border-[#D4D4D4] hover:border-[#B0B0B0]'
             )}
           >
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept=".json"
-              className="hidden"
-              onChange={handleFileChange}
-            />
+            <input ref={fileInputRef} type="file" accept=".json" className="hidden" onChange={handleFileChange} />
             {uploadedFileName ? (
-              <div>
-                <p className="font-medium text-zinc-900">{uploadedFileName}</p>
-                <p className="text-xs text-zinc-400 mt-1">Click to replace</p>
+              <div className="text-center">
+                <p className="text-[15px] font-medium text-black">{uploadedFileName}</p>
+                <p className="text-[13px] text-[#939393] mt-1">click to replace</p>
               </div>
             ) : (
-              <div>
-                <p className="text-zinc-500 mb-1">Drag and drop a ComfyUI workflow JSON file</p>
-                <p className="text-xs text-zinc-400">or click to browse</p>
-                <p className="text-xs text-zinc-400 mt-3">
-                  Must be an API export — in ComfyUI, Workflow → Export (API)
-                </p>
+              <div className="text-center">
+                <p className="text-[15px] text-black">Select a ComfyUI json to upload</p>
+                <p className="text-[13px] text-[#939393] mt-2">or drag and drop it here</p>
+                <p className="text-[13px] text-[#C0C0C0] mt-8">(Must be an API export)</p>
               </div>
             )}
           </div>
 
-          {parseError && (
-            <div className="border border-red-200 bg-red-50 text-red-700 text-sm px-4 py-3 rounded-sm">
-              {parseError}
-            </div>
-          )}
-
-          {blockingError && (
-            <div className="border border-red-200 bg-red-50 rounded-sm px-4 py-3">
-              <p className="text-xs font-semibold text-red-700 mb-1">
-                This workflow can&apos;t be packaged
-              </p>
-              <p className="text-sm text-red-700">{blockingError}</p>
-            </div>
-          )}
-
-          {uploadWarnings.length > 0 && (
-            <div className="border border-amber-200 bg-amber-50 rounded-sm px-4 py-3">
-              <p className="text-xs font-semibold text-amber-800 mb-1">Worth a look</p>
-              <ul className="list-disc list-inside space-y-0.5">
-                {uploadWarnings.map((w, i) => (
-                  <li key={i} className="text-sm text-amber-800">
-                    {w}
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
-
-          {rawGraph !== null && (
-            <div className="border border-zinc-200 rounded-sm px-4 py-3 text-sm text-zinc-600">
-              Parsed <strong>{nodeCount}</strong> nodes. Found{' '}
-              <strong>{dbModels.length}</strong> database model(s),{' '}
-              <strong>{possibleModels.length}</strong> possible model file(s),{' '}
-              {unseenLoaders.length > 0 && (
-                <>
-                  <strong>{unseenLoaders.length}</strong> loader(s) the scan can&apos;t name,{' '}
-                </>
-              )}
-              <strong>{variables.length}</strong> variable(s) and{' '}
-              <strong>{seedNodeIds.length}</strong> seed node(s).
-            </div>
-          )}
-
-          <div className="flex justify-end">
-            <button
-              disabled={rawGraph === null || matchLoading}
-              onClick={handleContinueFromUpload}
-              className="border border-zinc-300 rounded-sm px-6 py-2 text-sm font-medium text-zinc-900 bg-white hover:bg-zinc-50 disabled:opacity-40 transition-colors"
-            >
-              {matchLoading ? 'Looking up models…' : 'Continue →'}
-            </button>
+          {/* Status messages */}
+          <div className="mt-4 space-y-3">
+            {parseError && (
+              <UploadAlert kind="error" title="Invalid File" message={parseError} />
+            )}
+            {blockingError && (
+              <UploadAlert kind="error" title={blockingError.title} message={blockingError.message} />
+            )}
+            {uploadWarnings.map((w, i) => (
+              <UploadAlert key={i} kind="warning" title={w.title} message={w.message} />
+            ))}
+            {rawGraph !== null && (
+              <div className="text-[13px] text-black pl-2">
+                <p className="font-medium mb-2">Parsed {nodeCount} nodes and found:</p>
+                <div className="space-y-0.5">
+                  <p className="text-[#939393]">{dbModels.length} database model{dbModels.length !== 1 ? 's' : ''}</p>
+                  <p className="text-[#939393]">{possibleModels.length} possible model{possibleModels.length !== 1 ? 's' : ''}</p>
+                  <p className="text-[#939393]">{unseenLoaders.length} loader{unseenLoaders.length !== 1 ? 's' : ''}</p>
+                  <p className="text-[#939393]">{variables.length} variable{variables.length !== 1 ? 's' : ''}</p>
+                  <p className="text-[#939393]">{seedNodeIds.length} seed</p>
+                </div>
+              </div>
+            )}
           </div>
+
         </div>
       )}
 
       {/* ── Step 2: Database models ────────────────────────────────────── */}
       {step === 'requirements' && (
-        <div className="space-y-6">
-          <div className="border border-zinc-200 rounded-sm p-5">
-            <div className="font-semibold text-xs uppercase tracking-wide text-zinc-500 mb-1">
-              Models From The Database
-            </div>
-            <p className="text-xs text-zinc-400 mb-4">
-              Picked in ComfyUI via a vetted model loader node. Provenance comes from the
-              database record.
-            </p>
-
+        <div>
+          <div className="space-y-4">
             {dbModels.length === 0 ? (
-              <p className="text-sm text-zinc-400">
-                No vetted model loader nodes in this workflow. Any models it uses will
-                show up on the next step.
+              <p className="text-[13px] text-[#939393]">
+                No vetted model loader nodes found in this workflow.
               </p>
             ) : (
-              <div className="space-y-4">
-                {dbModels.map((m) => (
-                  <div key={m.nodeId} className="border border-zinc-100 rounded-sm p-4">
-                    <div className="mb-3">
-                      <p className="font-medium text-sm text-zinc-900">
-                        {m.dbMatch?.name ?? (m.nameLocal || m.fileNameLocal)}
-                      </p>
-                      <p className="text-xs text-zinc-400 font-mono">
-                        {m.dbMatch?.file_name ?? m.fileNameLocal}
-                      </p>
-                    </div>
+              dbModels.map((m) => (
+                <div key={m.nodeId} className="border border-[#E9E9E9] rounded-[8px] p-5">
+                  <p className="text-[15px] font-semibold text-black">
+                    {m.dbMatch?.name ?? (m.fileNameLocal || `(${m.class_type})`)}
+                  </p>
+                  <p className="text-[12px] text-[#939393] font-mono mt-0.5">
+                    {m.dbMatch?.file_name ?? m.fileNameLocal}
+                  </p>
 
-                    {m.dbMatch ? (
-                      <div className="grid grid-cols-2 gap-x-6 gap-y-1 text-xs text-zinc-500">
-                        <span>
-                          Category:{' '}
-                          <strong className="text-zinc-700">{m.dbMatch.category}</strong>
-                        </span>
-                        <span>
-                          Status:{' '}
-                          <strong className="text-zinc-700">{m.dbMatch.vetting_status}</strong>
-                        </span>
-                        <span>
-                          License:{' '}
-                          <strong className="text-zinc-700">{m.dbMatch.license ?? '—'}</strong>
-                        </span>
-                        <span>
-                          Attribution:{' '}
-                          <strong className="text-zinc-700">{m.dbMatch.attribution ?? '—'}</strong>
-                        </span>
-                        <span className="col-span-2 font-mono text-zinc-400 text-[10px] mt-1">
-                          provenance_id: {m.dbMatch.id}
-                        </span>
+                  {m.dbMatch ? (
+                    <div className="mt-4 grid gap-4" style={{ gridTemplateColumns: '1fr 1fr 2fr 2fr' }}>
+                      <div>
+                        <p className="text-[12px] text-[#939393] mb-1">category:</p>
+                        <p className="text-[13px] text-black capitalize">{m.dbMatch.category}</p>
                       </div>
-                    ) : (
-                      <div className="border border-amber-200 bg-amber-50 rounded-sm px-3 py-2">
-                        <p className="text-xs text-amber-800">
-                          <strong>{m.fileNameLocal || '—'}</strong> wasn&apos;t found in the
-                          database. Check that the filename matches a record, or add the provenance
-                          manually on the next step.
-                        </p>
+                      <div>
+                        <p className="text-[12px] text-[#939393] mb-1">status:</p>
+                        <StatusBadge status={m.dbMatch.vetting_status} />
                       </div>
-                    )}
-                  </div>
-                ))}
-              </div>
+                      <div>
+                        <p className="text-[12px] text-[#939393] mb-1">license:</p>
+                        <p className="text-[13px] text-black">{m.dbMatch.license ?? '—'}</p>
+                      </div>
+                      <div>
+                        <p className="text-[12px] text-[#939393] mb-1">attribution:</p>
+                        <p className="text-[13px] text-black">{m.dbMatch.attribution ?? '—'}</p>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="mt-4">
+                      <UploadAlert kind="warning" title="Missing model" message="No model selected for this loader." />
+                    </div>
+                  )}
+                </div>
+              ))
             )}
           </div>
 
-          <div className="flex justify-between">
-            <button
-              onClick={() => setStep('upload')}
-              className="border border-zinc-200 rounded-sm px-5 py-2 text-sm text-zinc-500 hover:bg-zinc-50"
-            >
-              ← Back
-            </button>
-            <button
-              onClick={() => setStep('possible-models')}
-              className="border border-zinc-300 rounded-sm px-6 py-2 text-sm font-medium text-zinc-900 bg-white hover:bg-zinc-50 transition-colors"
-            >
-              Continue →
-            </button>
-          </div>
         </div>
       )}
 
       {/* ── Step 3: Possible models ────────────────────────────────────── */}
       {step === 'possible-models' && (
-        <div className="space-y-6">
-          <div className="border border-zinc-200 rounded-sm p-5">
-            <div className="flex items-start justify-between gap-4 mb-1">
-              <div className="font-semibold text-xs uppercase tracking-wide text-zinc-500">
-                Other Possible Models
-              </div>
-              <button
-                onClick={() => addManualModel()}
-                className="text-xs border border-zinc-200 rounded-sm px-3 py-1 text-zinc-600 hover:border-zinc-400 transition-colors shrink-0"
-              >
-                + Add a model by hand
-              </button>
-            </div>
-            <p className="text-xs text-zinc-400 mb-4">
-              Found by scanning every node for filename-shaped strings, so this list is a guess —
-              tick the ones that are really model requirements. If something is missing, add it by
-              hand.
-            </p>
-
-            {unseenLoaders.length > 0 && (
-              <div className="border border-amber-200 bg-amber-50 rounded-sm p-4 mb-4 space-y-3">
-                <div>
-                  <p className="text-xs font-semibold text-amber-800">
-                    Models the scan can&apos;t see
-                  </p>
-                  <p className="text-xs text-amber-800 mt-1">
-                    These are loader nodes with no filename in the workflow — either they pick a
-                    model by preset name, or we don&apos;t recognise how they name it. They still
-                    need to be listed as requirements, so add each one by hand below.
-                  </p>
-                </div>
-                {unseenLoaders.map((ul) => (
-                  <div key={ul.nodeId} className="border border-amber-200 bg-white rounded-sm p-3">
-                    <p className="text-sm text-zinc-900">
-                      {ul.nodeTitle}{' '}
-                      <span className="text-xs text-zinc-400">
-                        · node {ul.nodeId} · <code className="font-mono">{ul.class_type}</code>
-                      </span>
-                    </p>
-                    {ul.preset && (
-                      <p className="text-xs text-zinc-500 mt-0.5">
-                        preset: <code className="font-mono">{ul.preset}</code>
-                      </p>
-                    )}
-                    <p className="text-xs text-zinc-500 mt-1">{ul.note}</p>
-                    <div className="flex flex-wrap gap-2 mt-2">
-                      {ul.loads.length > 0 ? (
-                        ul.loads.map((cat) => (
-                          <button
-                            key={cat}
-                            onClick={() => addManualModel(cat, `For ${ul.nodeTitle} (node ${ul.nodeId})`)}
-                            className="text-xs border border-zinc-300 rounded-sm px-2.5 py-1 text-zinc-700 bg-white hover:bg-zinc-50 transition-colors"
-                          >
-                            + Add {cat} model
-                          </button>
-                        ))
-                      ) : (
-                        <button
-                          onClick={() => addManualModel('checkpoints', `For ${ul.nodeTitle} (node ${ul.nodeId})`)}
-                          className="text-xs border border-zinc-300 rounded-sm px-2.5 py-1 text-zinc-700 bg-white hover:bg-zinc-50 transition-colors"
-                        >
-                          + Add the model this node loads
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-
-            {possibleModels.length === 0 ? (
-              <p className="text-sm text-zinc-400">
-                No model-shaped filenames found
-                {unseenLoaders.length > 0 ? ' beyond the ones flagged above' : ''}. If this workflow
-                needs a model that isn&apos;t already listed, add it by hand.
-              </p>
-            ) : (
-              <div className="space-y-4">
-                {possibleModels.map((p) => (
-                  <div
-                    key={p.key}
-                    className={cn(
-                      'border rounded-sm p-4 transition-colors',
-                      p.selected ? 'border-zinc-300 bg-white' : 'border-zinc-100 bg-zinc-50/50'
-                    )}
-                  >
+        <div>
+          <div className="space-y-4">
+            {/* Unseen loaders + any models added for each */}
+            {unseenLoaders.map((ul) => {
+              const addedForLoader = possibleModels.filter((p) => p.forLoaderNodeId === ul.nodeId);
+              return (
+                <>
+                  <div key={ul.nodeId} className="border border-[#FDE68A] bg-[#FFFBEB] rounded-[8px] p-5">
                     <div className="flex items-start gap-3">
-                      <input
-                        type="checkbox"
-                        checked={p.selected}
-                        onChange={(e) => updatePossible(p.key, 'selected', e.target.checked)}
-                        className="mt-1 shrink-0"
-                        id={`sel_${p.key}`}
-                      />
-                      <div className="flex-1 min-w-0">
-                        {p.nodeId === null ? (
-                          <div>
-                            <input
-                              className={inputClass}
-                              value={p.fileName}
-                              onChange={(e) => updatePossible(p.key, 'fileName', e.target.value)}
-                              placeholder="filename.safetensors"
-                            />
-                            <p className="text-xs text-zinc-400 mt-1">{p.nodeTitle}</p>
-                          </div>
-                        ) : (
-                          <label htmlFor={`sel_${p.key}`} className="cursor-pointer block">
-                            <p className="font-mono text-sm text-zinc-900 break-all">
-                              {p.fileName}
-                            </p>
-                            <p className="text-xs text-zinc-400">{p.nodeTitle}</p>
-                          </label>
-                        )}
+                      <div className="shrink-0">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
+                          <path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" stroke="#D97706" strokeWidth="1.5" strokeLinejoin="round" />
+                          <path d="M12 9v4" stroke="#D97706" strokeWidth="1.5" strokeLinecap="round" />
+                          <circle cx="12" cy="17" r="0.75" fill="#D97706" />
+                        </svg>
+                      </div>
+                      <div>
+                        <p className="text-[12px] text-[#939393] mb-0.5">Missing filename</p>
+                        <p className="text-[15px] font-semibold text-black">{ul.nodeTitle}</p>
+                        <div className="flex flex-wrap gap-2 mt-3">
+                          {ul.loads.length > 0 ? (
+                            ul.loads.map((cat) => (
+                              <button
+                                key={cat}
+                                onClick={() => addManualModel(cat, ul.nodeId)}
+                                className="border border-[#E9E9E9] bg-white rounded-[8px] px-3 py-1.5 text-[13px] text-black hover:border-[#B0B0B0] transition-colors"
+                              >
+                                + Add {LOADER_CAT_LABELS[cat] ?? cat} Model
+                              </button>
+                            ))
+                          ) : (
+                            <button
+                              onClick={() => addManualModel('checkpoints', ul.nodeId)}
+                              className="border border-[#E9E9E9] bg-white rounded-[8px] px-3 py-1.5 text-[13px] text-black hover:border-[#B0B0B0] transition-colors"
+                            >
+                              + Add Model
+                            </button>
+                          )}
+                        </div>
                       </div>
                     </div>
-
-                    {p.selected && (
-                      <div className="mt-4 pl-6 space-y-3">
-                        <div className="max-w-xs">
-                          <FieldLabel tip="Which ComfyUI models/ subfolder this file belongs in. Determines where the plugin puts it on disk.">Category</FieldLabel>
-                          <select
-                            className={inputClass}
-                            value={p.category}
-                            onChange={(e) => updatePossible(p.key, 'category', e.target.value)}
-                          >
-                            {COMFY_MODEL_FOLDERS.map((f) => (
-                              <option key={f} value={f}>
-                                {f}
-                              </option>
-                            ))}
-                          </select>
-                        </div>
-                        <p className="text-xs text-zinc-400">
-                          Provenance — fill in whatever you know. All fields optional.
-                        </p>
-                        <ProvenanceFields
-                          value={p.provenance}
-                          onChange={(field, v) => updatePossibleProvenance(p.key, field, v)}
+                  </div>
+                  {addedForLoader.map((p) => (
+                    <div
+                      key={p.key}
+                      className={cn('border rounded-[8px] p-5 transition-colors', p.selected ? 'border-black' : 'border-[#E9E9E9]')}
+                    >
+                      <div className="flex items-start gap-3">
+                        <input
+                          type="checkbox"
+                          checked={p.selected}
+                          onChange={(e) => updatePossible(p.key, 'selected', e.target.checked)}
+                          className="mt-1 shrink-0 w-4 h-4 accent-black"
                         />
+                        <div className="flex-1 min-w-0">
+                          {!p.selected && (
+                            <p className="text-[15px] font-semibold text-black">{p.fileName || 'New model'}</p>
+                          )}
+                          {p.selected && (
+                            <div className="space-y-4">
+                              <div>
+                                <label className={CARD_LABEL}>File Name:</label>
+                                <input className={CARD_INPUT} value={p.fileName} onChange={(e) => updatePossible(p.key, 'fileName', e.target.value)} placeholder="filename.safetensors" />
+                              </div>
+                              <div>
+                                <label className={CARD_LABEL}>Category:</label>
+                                <SelectInput className={cn(CARD_INPUT, 'cursor-pointer')} value={p.category} onChange={(e) => updatePossible(p.key, 'category', e.target.value)}>
+                                  {COMFY_MODEL_FOLDERS.map((f) => <option key={f} value={f}>{LOADER_CAT_LABELS[f] ?? f}</option>)}
+                                </SelectInput>
+                              </div>
+                              <div className="grid grid-cols-2 gap-4">
+                                <div><label className={CARD_LABEL}>Download URL:</label><input className={CARD_INPUT} value={p.provenance.download_url} onChange={(e) => updatePossibleProvenance(p.key, 'download_url', e.target.value)} placeholder="https://huggingface.co/..." /></div>
+                                <div><label className={CARD_LABEL}>License:</label><input className={CARD_INPUT} value={p.provenance.license} onChange={(e) => updatePossibleProvenance(p.key, 'license', e.target.value)} placeholder="e.g. Apache 2.0" /></div>
+                                <div><label className={CARD_LABEL}>Attribution:</label><input className={CARD_INPUT} value={p.provenance.attribution} onChange={(e) => updatePossibleProvenance(p.key, 'attribution', e.target.value)} placeholder="Creator or organization" /></div>
+                                <div><label className={CARD_LABEL}>Attribution URL:</label><input className={CARD_INPUT} value={p.provenance.attribution_url} onChange={(e) => updatePossibleProvenance(p.key, 'attribution_url', e.target.value)} placeholder="https://..." /></div>
+                              </div>
+                              <div><label className={CARD_LABEL}>Data Provenance Notes:</label><input className={CARD_INPUT} value={p.provenance.data_provenance_notes} onChange={(e) => updatePossibleProvenance(p.key, 'data_provenance_notes', e.target.value)} placeholder="Creator or organization" /></div>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </>
+              );
+            })}
+
+            {/* Scan-detected + ungrouped models */}
+            {possibleModels.filter((p) => !p.forLoaderNodeId).map((p) => (
+              <div
+                key={p.key}
+                className={cn('border rounded-[8px] p-5 transition-colors', p.selected ? 'border-black' : 'border-[#E9E9E9]')}
+              >
+                <div className="flex items-start gap-3">
+                  <input
+                    type="checkbox"
+                    checked={p.selected}
+                    onChange={(e) => updatePossible(p.key, 'selected', e.target.checked)}
+                    className="mt-1 shrink-0 w-4 h-4 accent-black"
+                  />
+                  <div className="flex-1 min-w-0">
+                    {!p.selected ? (
+                      <>
+                        <p className="text-[15px] font-semibold text-black">{p.nodeTitle || p.fileName}</p>
+                        <p className="text-[12px] text-[#939393] font-mono mt-0.5">{p.fileName}</p>
+                      </>
+                    ) : (
+                      <div className="space-y-4">
+                        <div>
+                          <p className="text-[15px] font-semibold text-black">{p.nodeTitle || p.fileName}</p>
+                          <p className="text-[12px] text-[#939393] font-mono mt-0.5">{p.fileName}</p>
+                        </div>
+                        <div>
+                          <label className={CARD_LABEL}>Category:</label>
+                          <SelectInput className={cn(CARD_INPUT, 'cursor-pointer')} value={p.category} onChange={(e) => updatePossible(p.key, 'category', e.target.value)}>
+                            {COMFY_MODEL_FOLDERS.map((f) => <option key={f} value={f}>{LOADER_CAT_LABELS[f] ?? f}</option>)}
+                          </SelectInput>
+                        </div>
+                        <div className="grid grid-cols-2 gap-4">
+                          <div><label className={CARD_LABEL}>Download URL:</label><input className={CARD_INPUT} value={p.provenance.download_url} onChange={(e) => updatePossibleProvenance(p.key, 'download_url', e.target.value)} placeholder="https://huggingface.co/..." /></div>
+                          <div><label className={CARD_LABEL}>License:</label><input className={CARD_INPUT} value={p.provenance.license} onChange={(e) => updatePossibleProvenance(p.key, 'license', e.target.value)} placeholder="e.g. Apache 2.0" /></div>
+                          <div><label className={CARD_LABEL}>Attribution:</label><input className={CARD_INPUT} value={p.provenance.attribution} onChange={(e) => updatePossibleProvenance(p.key, 'attribution', e.target.value)} placeholder="Creator or organization" /></div>
+                          <div><label className={CARD_LABEL}>Attribution URL:</label><input className={CARD_INPUT} value={p.provenance.attribution_url} onChange={(e) => updatePossibleProvenance(p.key, 'attribution_url', e.target.value)} placeholder="https://..." /></div>
+                        </div>
+                        <div><label className={CARD_LABEL}>Data Provenance Notes:</label><input className={CARD_INPUT} value={p.provenance.data_provenance_notes} onChange={(e) => updatePossibleProvenance(p.key, 'data_provenance_notes', e.target.value)} placeholder="Creator or organization" /></div>
                       </div>
                     )}
                   </div>
-                ))}
+                </div>
               </div>
+            ))}
+
+            {unseenLoaders.length === 0 && possibleModels.length === 0 && (
+              <p className="text-[13px] text-[#939393]">No models found in this workflow.</p>
             )}
           </div>
 
-          <div className="flex justify-between">
-            <button
-              onClick={() => setStep('requirements')}
-              className="border border-zinc-200 rounded-sm px-5 py-2 text-sm text-zinc-500 hover:bg-zinc-50"
-            >
-              ← Back
-            </button>
-            <button
-              onClick={() => setStep('variables')}
-              className="border border-zinc-300 rounded-sm px-6 py-2 text-sm font-medium text-zinc-900 bg-white hover:bg-zinc-50 transition-colors"
-            >
-              Continue with {selectedCount} selected →
-            </button>
-          </div>
         </div>
       )}
 
       {/* ── Step 4: Variables ──────────────────────────────────────────── */}
       {step === 'variables' && (
-        <div className="space-y-6">
-          <div className="border border-zinc-200 rounded-sm p-5">
-            <div className="font-semibold text-xs uppercase tracking-wide text-zinc-500 mb-4">
-              Variables
-            </div>
-
+        <div>
+          <div className="space-y-4">
             {validationErrors.length > 0 && (
-              <div className="border border-red-200 bg-red-50 rounded-sm p-3 mb-4">
-                <p className="text-xs font-semibold text-red-700 mb-1">
-                  Fix these before continuing:
-                </p>
-                <ul className="list-disc list-inside space-y-0.5">
-                  {validationErrors.map((e, i) => (
-                    <li key={i} className="text-xs text-red-700">
-                      {e}
-                    </li>
-                  ))}
-                </ul>
-              </div>
+              <UploadAlert kind="error" title="Fix before continuing" message={validationErrors.join(' ')} />
             )}
 
-            {variables.length === 0 ? (
-              <p className="text-sm text-zinc-400">
-                No Variable nodes in this workflow, so nothing will be adjustable from the plugin.
-                That&apos;s fine — add {Object.keys(PSEUDO_VARIABLE_CLASS_TYPES).join(', ')} nodes
-                in ComfyUI and re-upload if that isn&apos;t what you want.
-              </p>
-            ) : (
-              <div className="space-y-6">
-                {variables.map((v, idx) => (
-                  <div key={v.nodeId} className="border border-zinc-100 rounded-sm p-4">
-                    <div className="flex items-center gap-2 mb-4">
-                      <code className="font-mono text-xs bg-zinc-100 px-2 py-0.5 rounded">
-                        {v.token || '(needs a name)'}
-                      </code>
-                      <span className="text-xs border border-zinc-200 text-zinc-500 px-1.5 py-0.5 rounded-sm">
-                        {v.type}
-                      </span>
-                      <span className="text-xs text-zinc-400">
-                        from node {v.nodeId} · {v.class_type}
-                      </span>
-                    </div>
+            {/* Variable cards */}
+            {variables.map((v, idx) => (
+              <div key={v.nodeId} className="border border-[#E9E9E9] rounded-[8px] p-5">
+                <div className="flex items-center gap-3 mb-4">
+                  <code className="font-mono text-[13px] font-medium text-black">{v.token || '(needs a name)'}</code>
+                  <span className="border border-[#E9E9E9] rounded-[6px] px-2 py-0.5 text-[12px] text-[#939393] capitalize bg-white">{v.type}</span>
+                </div>
 
-                    <div className="grid md:grid-cols-2 gap-4">
-                      <div>
-                        <FieldLabel tip="What this control is called in the Rhino plugin. Also generates the binds_to token that links it back to the node.">Variable Name</FieldLabel>
-                        <input
-                          className={inputClass}
-                          value={v.name}
-                          onChange={(e) => updateVar(idx, 'name', e.target.value)}
-                          placeholder="e.g. Adherence"
-                        />
-                      </div>
-                      <div className="md:col-span-2">
-                        <FieldLabel tip="A short line telling someone what this control actually changes about the image.">Description</FieldLabel>
-                        <input
-                          className={inputClass}
-                          value={v.description}
-                          onChange={(e) => updateVar(idx, 'description', e.target.value)}
-                          placeholder="Shown to the user in the Rhino plugin"
-                        />
-                      </div>
-                      <div>
-                        <FieldLabel tip="The value used when nobody touches the control. Pre-filled with whatever you left in the ComfyUI graph.">Default</FieldLabel>
-                        <input
-                          className={inputClass}
-                          value={v.default}
-                          onChange={(e) => updateVar(idx, 'default', e.target.value)}
-                        />
-                      </div>
-                      {(v.type === 'int' || v.type === 'float') && (
-                        <>
-                          <div>
-                            <FieldLabel tip="Lowest value the control will allow.">Min</FieldLabel>
-                            <input
-                              className={inputClass}
-                              value={v.min}
-                              onChange={(e) => updateVar(idx, 'min', e.target.value)}
-                            />
-                          </div>
-                          <div>
-                            <FieldLabel tip="Highest value the control will allow.">Max</FieldLabel>
-                            <input
-                              className={inputClass}
-                              value={v.max}
-                              onChange={(e) => updateVar(idx, 'max', e.target.value)}
-                            />
-                          </div>
-                          <div>
-                            <FieldLabel tip="How far the value jumps each time the control is nudged.">Step</FieldLabel>
-                            <input
-                              className={inputClass}
-                              value={v.step}
-                              onChange={(e) => updateVar(idx, 'step', e.target.value)}
-                            />
-                          </div>
-                        </>
-                      )}
-                    </div>
+                <div className="mb-4">
+                  <label className={CARD_LABEL}>Variable Name:</label>
+                  <input className={CARD_INPUT} value={v.name} onChange={(e) => updateVar(idx, 'name', e.target.value)} placeholder="e.g. Adherence" />
+                </div>
+
+                {(v.type === 'int' || v.type === 'float') && (
+                  <div className="grid grid-cols-2 gap-4 mb-4">
+                    <div><label className={CARD_LABEL}>Default:</label><input className={CARD_INPUT} value={v.default} onChange={(e) => updateVar(idx, 'default', e.target.value)} /></div>
+                    <div><label className={CARD_LABEL}>Min:</label><input className={CARD_INPUT} value={v.min} onChange={(e) => updateVar(idx, 'min', e.target.value)} /></div>
+                    <div><label className={CARD_LABEL}>Max:</label><input className={CARD_INPUT} value={v.max} onChange={(e) => updateVar(idx, 'max', e.target.value)} /></div>
+                    <div><label className={CARD_LABEL}>Step:</label><input className={CARD_INPUT} value={v.step} onChange={(e) => updateVar(idx, 'step', e.target.value)} /></div>
                   </div>
-                ))}
-              </div>
-            )}
-          </div>
+                )}
 
-          {/* Seeds are detected and tokenized, but aren't user-configurable and
-              don't appear in the output's variables[] list. */}
-          <div className="border border-zinc-200 rounded-sm p-5">
-            <div className="font-semibold text-xs uppercase tracking-wide text-zinc-500 mb-1">
-              Seeds
+                <div>
+                  <label className={CARD_LABEL}>Description:</label>
+                  <input className={CARD_INPUT} value={v.description} onChange={(e) => updateVar(idx, 'description', e.target.value)} placeholder="Shown in Rhino Plugin" />
+                </div>
+              </div>
+            ))}
+
+            {variables.length === 0 && (
+              <UploadAlert kind="warning" title="No variables found" message="No variable nodes were detected in this workflow." />
+            )}
+
+            {/* Seed card */}
+            <div className="border border-[#E9E9E9] rounded-[8px] p-5">
+              <div className="flex items-center gap-3">
+                <code className="font-mono text-[13px] font-medium text-black">{SEED_TOKEN}</code>
+                <span className="border border-[#E9E9E9] rounded-[6px] px-2 py-0.5 text-[12px] text-[#939393] bg-white">Seed</span>
+              </div>
+              {seedNodeIds.length === 0 && (
+                <div className="mt-4">
+                  <UploadAlert kind="warning" title="Missing Node" message={`No ${PSEUDO_SEED_NODE} node found.`} />
+                </div>
+              )}
             </div>
-            <p className="text-xs text-zinc-400 mb-4">
-              Handled automatically — the plugin drives the seed. It isn&apos;t listed as a
-              variable and has no binds_to.
-            </p>
-            {seedNodeIds.length === 0 ? (
-              <div className="border border-amber-200 bg-amber-50 rounded-sm px-3 py-2">
-                <p className="text-xs text-amber-800">
-                  {`No ${PSEUDO_SEED_NODE} node in this workflow. It will still render, but the seed stays fixed at whatever the graph already holds — every run produces the same image, and nobody using this workflow in the plugin can reroll it. Add one in ComfyUI and re-upload if that isn't what you want.`}
-                </p>
-              </div>
-            ) : (
-              <div className="flex items-center gap-2">
-                <code className="font-mono text-xs bg-zinc-100 px-2 py-0.5 rounded">
-                  {SEED_TOKEN}
-                </code>
-                <span className="text-xs text-zinc-400">
-                  {seedNodeIds.length === 1
-                    ? `node ${seedNodeIds[0]}`
-                    : `${seedNodeIds.length} nodes (${seedNodeIds.join(', ')}) — all driven together`}
-                </span>
-              </div>
-            )}
           </div>
 
-          <div className="flex justify-between">
-            <button
-              onClick={() => setStep('possible-models')}
-              className="border border-zinc-200 rounded-sm px-5 py-2 text-sm text-zinc-500 hover:bg-zinc-50"
-            >
-              ← Back
-            </button>
-            <button
-              onClick={handleContinueFromVariables}
-              className="border border-zinc-300 rounded-sm px-6 py-2 text-sm font-medium text-zinc-900 bg-white hover:bg-zinc-50 transition-colors"
-            >
-              Continue →
-            </button>
-          </div>
         </div>
       )}
 
       {/* ── Step 5: Metadata ───────────────────────────────────────────── */}
       {step === 'metadata' && (
-        <div className="space-y-6">
-          <div className="border border-zinc-200 rounded-sm p-5 space-y-5">
-            <div className="font-semibold text-xs uppercase tracking-wide text-zinc-500">
-              Workflow Info
-            </div>
-            <div>
-              <FieldLabel tip="How this workflow is listed in the Rhino plugin. Also becomes the download filename.">Workflow Name *</FieldLabel>
-              <input
-                className={inputClass}
-                value={workflowName}
-                onChange={(e) => setWorkflowName(e.target.value)}
-                placeholder="e.g. Juggernaut Essential"
-                required
-              />
-            </div>
-            <div>
-              <FieldLabel tip="What this workflow is for and the kind of images it makes. Shown when choosing between workflows.">Description</FieldLabel>
-              <textarea
-                className={cn(inputClass, 'min-h-[80px] resize-y')}
-                value={description}
-                onChange={(e) => setDescription(e.target.value)}
-                placeholder="What does this workflow do? What is it good for?"
-              />
-            </div>
-            <div>
-              <FieldLabel tip="A sample render showing what this workflow produces. Shown as its preview when picking a workflow.">Thumbnail</FieldLabel>
-              <input
-                ref={thumbInputRef}
-                type="file"
-                accept="image/*"
-                className="hidden"
-                onChange={handleThumbChange}
-              />
-              <div className="flex items-center gap-4">
-                {thumbnailDataUri && (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img
-                    src={thumbnailDataUri}
-                    alt="Thumbnail preview"
-                    className="w-20 h-20 object-cover rounded-sm border border-zinc-200"
-                  />
-                )}
-                <button
-                  type="button"
-                  onClick={() => thumbInputRef.current?.click()}
-                  className="text-sm border border-zinc-200 rounded-sm px-3 py-1.5 text-zinc-600 hover:border-zinc-400 transition-colors"
-                >
-                  {thumbnailDataUri ? 'Replace image' : 'Upload image'}
-                </button>
+        <div>
+          <div className="space-y-4">
+            {/* Workflow Details */}
+            <div className="border border-[#E9E9E9] rounded-[8px] p-5">
+              <p className="text-[13px] font-semibold text-black mb-4">Workflow Details</p>
+              <div className="space-y-4">
+                <div>
+                  <label className={CARD_LABEL}>Workflow Name</label>
+                  <input className={CARD_INPUT} value={workflowName} onChange={(e) => setWorkflowName(e.target.value)} placeholder="e.g. Juggernaut" />
+                </div>
+                <div>
+                  <label className={CARD_LABEL}>Description</label>
+                  <input className={CARD_INPUT} value={description} onChange={(e) => setDescription(e.target.value)} placeholder="Shown in Rhino Plugin" />
+                </div>
+                <div>
+                  <label className={CARD_LABEL}>Thumbnail</label>
+                  <input ref={thumbInputRef} type="file" accept="image/*" className="hidden" onChange={handleThumbChange} />
+                  <div className="flex items-center gap-3">
+                    {thumbnailDataUri && (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img src={thumbnailDataUri} alt="Thumbnail" className="w-16 h-16 object-cover rounded-[8px] border border-[#E9E9E9]" />
+                    )}
+                    <button type="button" onClick={() => thumbInputRef.current?.click()} className="border border-[#E9E9E9] rounded-[8px] px-3 py-1.5 text-[13px] text-black hover:border-[#B0B0B0] transition-colors">
+                      {thumbnailDataUri ? 'Replace image' : 'Upload image'}
+                    </button>
+                  </div>
+                </div>
               </div>
-              <p className="text-xs text-zinc-400 mt-1">
-                Will be embedded as a base64 data URI in the output file.
-              </p>
             </div>
-          </div>
 
-          <div className="border border-zinc-200 rounded-sm p-5 space-y-4">
-            <div className="font-semibold text-xs uppercase tracking-wide text-zinc-500">
-              Workflow Attribution
+            {/* Attribution Details */}
+            <div className="border border-[#E9E9E9] rounded-[8px] p-5">
+              <p className="text-[13px] font-semibold text-black mb-4">Attribution Details</p>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className={CARD_LABEL}>Author</label>
+                  <input className={CARD_INPUT} value={attribution.author} onChange={(e) => setAttribution((a) => ({ ...a, author: e.target.value }))} placeholder="e.g John Doe" />
+                </div>
+                <div>
+                  <label className={CARD_LABEL}>Author URL</label>
+                  <input className={CARD_INPUT} type="url" value={attribution.author_url} onChange={(e) => setAttribution((a) => ({ ...a, author_url: e.target.value }))} placeholder="https://..." />
+                </div>
+                <div className="col-span-2">
+                  <label className={CARD_LABEL}>License</label>
+                  <input className={CARD_INPUT} value={attribution.license} onChange={(e) => setAttribution((a) => ({ ...a, license: e.target.value }))} placeholder="e.g Apache 2.0" />
+                </div>
+              </div>
             </div>
-            <div className="grid md:grid-cols-2 gap-4">
-              <div>
-                <FieldLabel tip="Who built this workflow. Credited to anyone who uses it.">Author</FieldLabel>
-                <input
-                  className={inputClass}
-                  value={attribution.author}
-                  onChange={(e) => setAttribution((a) => ({ ...a, author: e.target.value }))}
-                />
-              </div>
-              <div>
-                <FieldLabel tip="Link to the author's site or profile.">Author URL</FieldLabel>
-                <input
-                  className={inputClass}
-                  type="url"
-                  value={attribution.author_url}
-                  onChange={(e) => setAttribution((a) => ({ ...a, author_url: e.target.value }))}
-                />
-              </div>
-              <div>
-                <FieldLabel tip="How other people may use and share this workflow.">License</FieldLabel>
-                <input
-                  className={inputClass}
-                  value={attribution.license}
-                  onChange={(e) => setAttribution((a) => ({ ...a, license: e.target.value }))}
-                />
+
+            {/* Capability Flags */}
+            <div className="border border-[#E9E9E9] rounded-[8px] p-5">
+              <p className="text-[13px] font-semibold text-black mb-4">Capability Flags</p>
+              <div className="space-y-4">
+                {([
+                  { key: 'global_guidance_capabilities' as const, label: 'Global Guidance' },
+                  { key: 'regional_guidance_capabilities' as const, label: 'Regional Guidance' },
+                  { key: 'spatial_guidance_capabilities' as const, label: 'Spatial Guidance' },
+                ] as const).map(({ key, label }) => (
+                  <div key={key}>
+                    <p className="text-[12px] text-[#939393] mb-2">{label}</p>
+                    <div className="flex flex-wrap gap-4">
+                      {Object.keys(caps[key]).map((flagKey) => (
+                        <label key={flagKey} className="flex items-center gap-2 text-[13px] text-black cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={(caps[key] as Record<string, boolean>)[flagKey]}
+                            onChange={() => toggleCap(key, flagKey)}
+                            className="w-4 h-4 accent-black"
+                          />
+                          <span>{CAP_LABELS[flagKey]?.name ?? flagKey}</span>
+                          {CAP_LABELS[flagKey]?.type && (
+                            <span className="text-[12px] text-[#939393]">({CAP_LABELS[flagKey]?.type})</span>
+                          )}
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+                ))}
               </div>
             </div>
           </div>
 
-          <div className="border border-zinc-200 rounded-sm p-5 space-y-4">
-            <div>
-              <div className="font-semibold text-xs uppercase tracking-wide text-zinc-500">
-                Capability Flags
-              </div>
-              <p className="text-xs text-zinc-400 mt-1">
-                {capsAutoDetected
-                  ? 'Pre-checked from how your workflow is wired — each box below is ticked because the matching snapshot output is connected in your ComfyUI graph. Adjust any that look wrong.'
-                  : 'These describe what kinds of guidance the workflow supports. We check them automatically from how the snapshot is wired, but none were detected here — tick whatever applies.'}
-              </p>
-            </div>
-
-            <CapabilityGroup
-              title="Global Guidance"
-              tip="Guidance that applies to the whole image at once."
-              flags={caps.global_guidance_capabilities}
-              onToggle={(key) => toggleCap('global_guidance_capabilities', key)}
-            />
-
-            <CapabilityGroup
-              title="Regional Guidance"
-              tip="Guidance aimed at individual materials or regions of the model rather than the whole image."
-              flags={caps.regional_guidance_capabilities}
-              onToggle={(key) => toggleCap('regional_guidance_capabilities', key)}
-            />
-
-            <CapabilityGroup
-              title="Spatial Guidance"
-              tip="Guidance read from the 3D geometry itself, so the render follows the model."
-              flags={caps.spatial_guidance_capabilities}
-              onToggle={(key) => toggleCap('spatial_guidance_capabilities', key)}
-            />
-          </div>
-
-          <div className="flex justify-between">
-            <button
-              onClick={() => setStep('variables')}
-              className="border border-zinc-200 rounded-sm px-5 py-2 text-sm text-zinc-500 hover:bg-zinc-50"
-            >
-              ← Back
-            </button>
-            <button
-              disabled={!workflowName}
-              onClick={() => setStep('preview')}
-              className="border border-zinc-300 rounded-sm px-6 py-2 text-sm font-medium text-zinc-900 bg-white hover:bg-zinc-50 disabled:opacity-40 transition-colors"
-            >
-              Preview Output →
-            </button>
-          </div>
         </div>
       )}
 
       {/* ── Step 6: Preview & Download ─────────────────────────────────── */}
       {step === 'preview' && (
-        <div className="space-y-6">
-          <div className="border border-zinc-200 rounded-sm p-5">
-            <div className="flex items-center justify-between mb-4">
-              <div className="font-semibold text-xs uppercase tracking-wide text-zinc-500">
-                Output Preview
-              </div>
+        <div className="flex-1 flex flex-col min-h-0">
+          <JsonTree
+            data={buildOutput()}
+            bare
+            fill
+            contentBorder
+            actions={
               <button
                 onClick={downloadOutput}
-                className="border border-zinc-300 rounded-sm px-4 py-1.5 text-sm font-medium text-zinc-900 bg-white hover:bg-zinc-50 transition-colors"
+                className="flex items-center gap-1.5 border border-[#E9E9E9] rounded-[8px] px-3 py-1.5 text-[13px] text-black hover:border-[#B0B0B0] transition-colors"
               >
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                  <polyline points="7 10 12 15 17 10" />
+                  <line x1="12" y1="15" x2="12" y2="3" />
+                </svg>
                 Download .pseudorandom.json
               </button>
-            </div>
-            <JsonTree data={buildOutput()} maxHeight={560} />
-          </div>
+            }
+          />
 
-          <div className="flex justify-between">
-            <button
-              onClick={() => setStep('metadata')}
-              className="border border-zinc-200 rounded-sm px-5 py-2 text-sm text-zinc-500 hover:bg-zinc-50"
-            >
-              ← Back
-            </button>
-            <button
-              onClick={downloadOutput}
-              className="border border-zinc-900 bg-zinc-900 text-white rounded-sm px-6 py-2 text-sm font-medium hover:bg-zinc-800 transition-colors"
-            >
-              Download .pseudorandom.json
-            </button>
-          </div>
         </div>
       )}
+
+          </div>{/* end content */}
+        </div>{/* end overflow-y-auto */}
+
+        {/* Fade gradient above fixed nav */}
+        {step !== 'preview' && <div className="pointer-events-none absolute left-0 right-0 bottom-[78px] h-14 bg-gradient-to-t from-white to-transparent z-10" />}
+
+        {/* Fixed nav button bar */}
+        <div className="shrink-0 relative z-20 px-10 pt-4 pb-9 flex justify-between max-w-[800px]">
+          {step === 'upload' ? (
+            <button disabled className="flex items-center justify-center px-5 py-[6px] gap-[10px] rounded-[8px] bg-white border border-black text-[13px] text-black cursor-default opacity-40">Back</button>
+          ) : step === 'requirements' ? (
+            <button onClick={() => setStep('upload')} className="flex items-center justify-center px-5 py-[6px] gap-[10px] rounded-[8px] bg-white border border-black text-[13px] text-black hover:bg-zinc-50 transition-colors">Back</button>
+          ) : step === 'possible-models' ? (
+            <button onClick={() => setStep('requirements')} className="flex items-center justify-center px-5 py-[6px] gap-[10px] rounded-[8px] bg-white border border-black text-[13px] text-black hover:bg-zinc-50 transition-colors">Back</button>
+          ) : step === 'variables' ? (
+            <button onClick={() => setStep('possible-models')} className="flex items-center justify-center px-5 py-[6px] gap-[10px] rounded-[8px] bg-white border border-black text-[13px] text-black hover:bg-zinc-50 transition-colors">Back</button>
+          ) : step === 'metadata' ? (
+            <button onClick={() => setStep('variables')} className="flex items-center justify-center px-5 py-[6px] gap-[10px] rounded-[8px] bg-white border border-black text-[13px] text-black hover:bg-zinc-50 transition-colors">Back</button>
+          ) : (
+            <button onClick={() => setStep('metadata')} className="flex items-center justify-center px-5 py-[6px] gap-[10px] rounded-[8px] bg-white border border-black text-[13px] text-black hover:bg-zinc-50 transition-colors">Back</button>
+          )}
+          {step === 'upload' ? (
+            <button
+              disabled={rawGraph === null || !!blockingError || matchLoading}
+              onClick={handleContinueFromUpload}
+              className="flex items-center justify-center px-5 py-[6px] gap-[10px] rounded-[8px] bg-black text-[13px] text-white hover:bg-[#1a1a1a] disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+            >
+              {matchLoading ? 'Looking up models…' : 'Next'}
+            </button>
+          ) : step === 'requirements' ? (
+            <button onClick={() => setStep('possible-models')} className="flex items-center justify-center px-5 py-[6px] gap-[10px] rounded-[8px] bg-black text-[13px] text-white hover:bg-[#1a1a1a] transition-colors">Next</button>
+          ) : step === 'possible-models' ? (
+            <button onClick={() => setStep('variables')} className="flex items-center justify-center px-5 py-[6px] gap-[10px] rounded-[8px] bg-black text-[13px] text-white hover:bg-[#1a1a1a] transition-colors">Next</button>
+          ) : step === 'variables' ? (
+            <button onClick={handleContinueFromVariables} className="flex items-center justify-center px-5 py-[6px] gap-[10px] rounded-[8px] bg-black text-[13px] text-white hover:bg-[#1a1a1a] transition-colors">Next</button>
+          ) : step === 'metadata' ? (
+            <button disabled={!workflowName} onClick={() => setStep('preview')} className="flex items-center justify-center px-5 py-[6px] gap-[10px] rounded-[8px] bg-black text-[13px] text-white hover:bg-[#1a1a1a] disabled:opacity-40 transition-colors">Next</button>
+          ) : (
+            <button onClick={() => router.push('/')} className="flex items-center justify-center px-5 py-[6px] gap-[10px] rounded-[8px] bg-black text-[13px] text-white hover:bg-[#1a1a1a] transition-colors">Done</button>
+          )}
+        </div>
+        </div>{/* end main content column */}
+
+        {/* Right code preview panel — hidden on preview step, draggable width */}
+        {rawGraph !== null && step !== 'preview' && (
+          panelMinimized ? (
+            <div
+              className="shrink-0 border-l border-t border-[#E9E9E9] rounded-tl-[8px] flex items-center justify-center cursor-pointer hover:bg-zinc-50 transition-colors"
+              style={{ width: 32 }}
+              onClick={() => setPanelMinimized(false)}
+            >
+              <span
+                className="text-[11px] text-[#939393] font-medium whitespace-nowrap select-none"
+                style={{ writingMode: 'vertical-rl', transform: 'rotate(180deg)' }}
+              >
+                {outputFileName}
+              </span>
+            </div>
+          ) : (
+            <div
+              style={{ width: rightPanelWidth }}
+              className="shrink-0 border-l border-t border-[#E9E9E9] rounded-tl-[8px] flex flex-col overflow-hidden relative"
+            >
+              {/* Drag handle on the left edge */}
+              <div
+                onMouseDown={handlePanelDragStart}
+                className="absolute left-0 top-0 bottom-0 w-1 cursor-col-resize hover:bg-[#D4D4D4] transition-colors z-10"
+              />
+              {/* Header */}
+              <div className="flex items-center gap-3 px-4 py-3 border-b border-[#E9E9E9] shrink-0">
+                <button
+                  onClick={() => setPanelMinimized(true)}
+                  className="text-[#939393] hover:text-black transition-colors shrink-0"
+                >
+                  <HamburgerIcon />
+                </button>
+                <span className="text-[13px] font-medium text-black truncate flex-1">{outputFileName}</span>
+                {(diffAdded > 0 || diffRemoved > 0) && (
+                  <div className="flex items-center gap-2 shrink-0 font-mono text-[12px] font-semibold">
+                    {diffAdded > 0 && <span className="text-[#3fb950]">+{diffAdded}</span>}
+                    {diffRemoved > 0 && <span className="text-[#f85149]">-{diffRemoved}</span>}
+                  </div>
+                )}
+              </div>
+              {/* Diff content */}
+              <div className="flex-1 overflow-auto font-mono text-[11px] leading-[1.6]">
+                {diffResult ? diffResult.map((line, idx) => (
+                  <div
+                    key={idx}
+                    className={
+                      line.type === 'add' ? 'bg-[#eaffee] px-4' :
+                      line.type === 'remove' ? 'bg-[#fff0f0] px-4' :
+                      'text-[#57606a] px-4'
+                    }
+                  >
+                    <span className={cn(
+                      'select-none mr-2',
+                      line.type === 'add' ? 'text-[#1a7f37]' :
+                      line.type === 'remove' ? 'text-[#cf222e]' :
+                      'opacity-0'
+                    )}>
+                      {line.type === 'add' ? '+' : '-'}
+                    </span>
+                    <span className={line.type === 'same' ? '' : 'text-[#24292f]'}>{line.text}</span>
+                  </div>
+                )) : (
+                  <pre className="px-4 py-4 text-[#57606a] whitespace-pre">{currentOutputStr}</pre>
+                )}
+              </div>
+            </div>
+          )
+        )}
+      </div>{/* end content area */}
+
+      </div>{/* end three-column row */}
     </div>
   );
 }
