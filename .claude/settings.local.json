@@ -4,7 +4,11 @@
       "Bash(npm run *)",
       "Bash(unzip -o \"/Users/ednaho/Downloads/pt-accounts-main.zip\" -d \"/private/tmp/pt-accounts-inspect\")",
       "Bash(find /private/tmp/pt-accounts-inspect/pt-accounts-main -type f | grep -v node_modules | grep -v \".next\" | sort)",
-      "Bash(curl -s -o /dev/null -w \"%{http_code}\" http://localhost:3001/models)"
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\" http://localhost:3001/models)",
+      "Bash(npx tsc *)",
+      "Bash(git -C /Users/ednaho/pseudorandom-provenance status)",
+      "Bash(git -C /Users/ednaho/pseudorandom-provenance diff)",
+      "Bash(git -C /Users/ednaho/pseudorandom-provenance log --oneline -5)"
     ]
   }
 }

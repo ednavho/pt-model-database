@@ -159,13 +159,23 @@ export default function JsonTree({
   openToDepth = Infinity,
   maxHeight = 520,
   className,
+  bare = false,
+  fill = false,
+  contentBorder = false,
+  actions,
 }: {
   data: unknown;
-  /** Containers at or beyond this depth start collapsed. Default: all open. */
   openToDepth?: number;
-  /** Scroll height of the code panel, in px. */
   maxHeight?: number;
   className?: string;
+  /** Strip the border/background from the content area. */
+  bare?: boolean;
+  /** Expand to fill flex parent instead of using maxHeight. */
+  fill?: boolean;
+  /** Add border/radius directly on the code scroll area (controls stay outside). */
+  contentBorder?: boolean;
+  /** Slot rendered on the right of the Expand/Collapse controls. */
+  actions?: React.ReactNode;
 }) {
   const paths = useMemo(() => collectPaths(data), [data]);
   const [collapsed, setCollapsed] = useState<Set<string>>(
@@ -183,8 +193,8 @@ export default function JsonTree({
   const allCollapsed = collapsed.size >= paths.length;
 
   return (
-    <div className={className}>
-      <div className="mb-2 flex items-center gap-3">
+    <div className={cn(className, fill && 'flex flex-col min-h-0')}>
+      <div className="mb-2 shrink-0 flex items-end gap-3">
         <button
           type="button"
           onClick={() => setCollapsed(new Set())}
@@ -202,13 +212,16 @@ export default function JsonTree({
         >
           Collapse all
         </button>
+        {actions && <div className="ml-auto">{actions}</div>}
       </div>
 
       <div
-        style={{ maxHeight }}
+        style={fill ? undefined : { maxHeight }}
         className={cn(
-          'overflow-auto rounded-sm border border-zinc-100 bg-zinc-50 p-4',
-          'font-mono text-xs leading-relaxed'
+          'overflow-auto p-4 font-mono text-xs leading-relaxed',
+          !bare && 'rounded-sm border border-zinc-100 bg-zinc-50',
+          fill && 'flex-1 min-h-0',
+          contentBorder && 'border border-[#E9E9E9] rounded-[8px]'
         )}
       >
         <Branch
