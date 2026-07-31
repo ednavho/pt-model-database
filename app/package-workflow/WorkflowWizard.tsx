@@ -1200,7 +1200,7 @@ export default function WorkflowWizard() {
       <div className="flex flex-1 min-h-0 overflow-hidden pt-4">
 
       {/* Left sidebar */}
-      <aside className="w-[200px] shrink-0 px-6 pt-4 pb-8 overflow-y-auto">
+      <aside className="w-[200px] shrink-0 px-6 pb-8 overflow-y-auto">
         <div className="space-y-4">
           {STEPS.map((s, i) => {
             const completed = i < currentIdx;
