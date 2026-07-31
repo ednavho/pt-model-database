@@ -23,6 +23,7 @@ const FORMATS: { id: LayoutMode; label: string; note: string }[] = [
   { id: 'force', label: 'Force', note: 'Organic springy network' },
   { id: 'flow', label: 'Flow (L→R)', note: 'Image on the right, its ingredients pulling left' },
   { id: 'layers', label: 'Layers', note: 'Image right, rows of models / datasets / papers / people' },
+  { id: 'timeline', label: 'Timeline', note: 'Chronological order — oldest left, most recent right' },
 ];
 
 const DROPPED_ROOT = '__dropped__';
@@ -168,11 +169,12 @@ function Legend() {
 export default function LineageSketch() {
   const [drop, setDrop] = useState<DropState>({ kind: 'idle' });
   const [exampleId, setExampleId] = useState(DEFAULT_RENDER_ID);
-  const [expanded, setExpanded] = useState<Set<string>>(() => new Set([DEFAULT_RENDER_ID]));
+  const [expanded, setExpanded] = useState<Set<string>>(() => new Set(lineageNodes.map((n) => n.id)));
   const [zoomed, setZoomed] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
   const [layout, setLayout] = useState<LayoutMode>('force');
   const [imageUrl, setImageUrl] = useState<string | null>(null);
+  const [imageDimensions, setImageDimensions] = useState<{ w: number; h: number } | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Object URLs for the dropped image must be revoked when replaced.
@@ -195,11 +197,26 @@ export default function LineageSketch() {
   );
   const index = useMemo(() => buildIndex(nodes, links), [nodes, links]);
 
+  const indexRef = useRef(index);
+  indexRef.current = index;
+  const rootIdRef = useRef(rootId);
+  rootIdRef.current = rootId;
+
   const toggle = useCallback((id: string) => {
     setExpanded((prev) => {
       const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
+      if (next.has(id)) {
+        // Collapsing: remove this node and clean up nodes no longer reachable.
+        next.delete(id);
+        const stillVisible = computeVisible(indexRef.current, next, rootIdRef.current);
+        for (const n of next) {
+          if (!stillVisible.has(n)) next.delete(n);
+        }
+      } else {
+        // Expanding: just open this node — its direct neighbours become visible,
+        // but their own children stay collapsed until the user clicks them.
+        next.add(id);
+      }
       return next;
     });
   }, []);
@@ -233,12 +250,18 @@ export default function LineageSketch() {
     }
 
     const data = await buildFromRequirements(result.fileName, result.requirements);
+
+    const newUrl = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => setImageDimensions({ w: img.naturalWidth, h: img.naturalHeight });
+    img.src = newUrl;
     setImageUrl((prev) => {
       if (prev) URL.revokeObjectURL(prev);
-      return URL.createObjectURL(file);
+      return newUrl;
     });
+
     setDrop({ kind: 'ok', data });
-    setExpanded(new Set([DROPPED_ROOT]));
+    setExpanded(new Set([DROPPED_ROOT, ...lineageNodes.map((n) => n.id)]));
   }, []);
 
   const pickExample = (id: string) => {
@@ -246,9 +269,10 @@ export default function LineageSketch() {
       if (prev) URL.revokeObjectURL(prev);
       return null;
     });
+    setImageDimensions(null);
     setDrop({ kind: 'idle' });
     setExampleId(id);
-    setExpanded(new Set([id]));
+    setExpanded(new Set(lineageNodes.map((n) => n.id)));
   };
 
   useEffect(() => {
@@ -270,6 +294,7 @@ export default function LineageSketch() {
       rootId={rootId}
       layout={layout}
       imageUrl={dropped ? imageUrl : null}
+      imageDimensions={dropped ? (imageDimensions ?? undefined) : undefined}
       {...extra}
     />
   );
@@ -364,7 +389,7 @@ export default function LineageSketch() {
         </div>
       )}
 
-      {/* Format — the three ways to lay the same graph out */}
+      {/* Format — the four ways to lay the same graph out */}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex flex-wrap items-center gap-2">
           <span className="text-xs text-zinc-400">Format:</span>

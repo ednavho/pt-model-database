@@ -9,7 +9,7 @@ import {
 import * as d3 from 'd3';
 import { useCallback, useEffect, useMemo, useRef } from 'react';
 
-export type LayoutMode = 'force' | 'flow' | 'layers';
+export type LayoutMode = 'force' | 'flow' | 'layers' | 'timeline';
 
 export const TYPE_COLORS: Record<string, string> = {
   root: '#18181b',
@@ -33,6 +33,9 @@ export const TYPE_ICONS: Record<string, string> = {
 };
 
 const GRAPH_TYPES = ['model', 'dataset', 'paper', 'org', 'person'];
+
+const ROOT_R = 30;
+const ROOT_MAX_SIZE = 100;
 
 type SimNode = LineageNode & d3.SimulationNodeDatum;
 type SimLink = d3.SimulationLinkDatum<SimNode> & { label: string; verified: boolean };
@@ -135,41 +138,35 @@ function iconScale(radius: number): number {
 }
 
 /**
- * Keeps every node inside the frame like a bumper car: a node reaching the
- * wall is stopped at it and its velocity reflected back inward. Pinned nodes
- * (dragged, or the anchored root) get clamped instead. Zoom is a separate
- * transform, so a viewer who wants more air just scrolls to zoom out.
+ * Soft-spring border: applies gentle velocity nudges when a node gets near the
+ * edge, with a hard stop only far outside the frame to prevent total escape.
  */
 function boundsForce(
-  getBounds: () => { w: number; h: number },
+  getBounds: () => { w: number; h: number; minX?: number; minY?: number },
   radiusFn: (n: SimNode) => number
 ) {
   let nodes: SimNode[] = [];
   const force = () => {
-    const { w, h } = getBounds();
+    const { w, h, minX = 0, minY = 0 } = getBounds();
     for (const n of nodes) {
-      const r = radiusFn(n) + 2;
+      const r = radiusFn(n) + 4;
+      const soft = 35;
       if (n.fx == null) {
-        if (n.x! < r) {
-          n.x = r;
-          if (n.vx! < 0) n.vx = -n.vx! * 0.5;
-        } else if (n.x! > w - r) {
-          n.x = w - r;
-          if (n.vx! > 0) n.vx = -n.vx! * 0.5;
-        }
+        const gaps = [
+          (n.x! - minX) - r,
+          (minX + w) - r - n.x!,
+          (n.y! - minY) - r,
+          (minY + h) - r - n.y!,
+        ];
+        if (gaps[0] < soft) n.vx = (n.vx ?? 0) + (soft - gaps[0]) * 0.012;
+        if (gaps[1] < soft) n.vx = (n.vx ?? 0) - (soft - gaps[1]) * 0.012;
+        if (gaps[2] < soft) n.vy = (n.vy ?? 0) + (soft - gaps[2]) * 0.012;
+        if (gaps[3] < soft) n.vy = (n.vy ?? 0) - (soft - gaps[3]) * 0.012;
+        n.x = Math.max(minX - r * 0.5, Math.min(minX + w + r * 0.5, n.x!));
+        n.y = Math.max(minY - r * 0.5, Math.min(minY + h + r * 0.5, n.y!));
       } else {
-        n.fx = Math.max(r, Math.min(w - r, n.fx));
-      }
-      if (n.fy == null) {
-        if (n.y! < r) {
-          n.y = r;
-          if (n.vy! < 0) n.vy = -n.vy! * 0.5;
-        } else if (n.y! > h - r) {
-          n.y = h - r;
-          if (n.vy! > 0) n.vy = -n.vy! * 0.5;
-        }
-      } else {
-        n.fy = Math.max(r, Math.min(h - r, n.fy));
+        n.fx = Math.max(minX + r, Math.min(minX + w - r, n.fx ?? 0));
+        n.fy = Math.max(minY + r, Math.min(minY + h - r, n.fy ?? 0));
       }
     }
   };
@@ -187,11 +184,30 @@ function popupHtml(node: LineageNode): string {
       ? 'The image this whole graph is rooted in.'
       : (NODE_DESCRIPTIONS[node.id] ?? `A ${node.type} in this image's lineage.`);
 
-  const badge = node.verified === false
-    ? '<span style="margin-left:6px;font-size:10px;color:#b45309;border:1px dashed #f59e0b;border-radius:3px;padding:0 4px">unverified</span>'
-    : '';
-  const src = node.source
-    ? `<a href="${node.source}" target="_blank" rel="noopener noreferrer" style="color:#3f3f46;text-decoration:underline;font-size:11px">source ↗</a>`
+  const badge =
+    node.verified === false
+      ? '<span style="margin-left:6px;font-size:10px;color:#b45309;border:1px dashed #f59e0b;border-radius:3px;padding:0 4px">unverified</span>'
+      : '';
+
+  const allLinks = [
+    ...(node.links ?? []),
+    ...(node.source ? [{ label: 'Source', url: node.source }] : []),
+  ];
+
+  const linksHtml =
+    allLinks.length > 0
+      ? `<div style="margin-top:7px;display:flex;flex-wrap:wrap;gap:5px 8px">
+          ${allLinks
+            .map(
+              (l) =>
+                `<a href="${l.url}" target="_blank" rel="noopener noreferrer" style="color:#3f3f46;text-decoration:underline;font-size:11px">${l.label} ↗</a>`
+            )
+            .join('')}
+        </div>`
+      : '';
+
+  const dateLine = node.date
+    ? `<div style="font-size:10px;color:#a1a1aa;margin-bottom:2px">${node.date}</div>`
     : '';
 
   return `
@@ -202,9 +218,10 @@ function popupHtml(node: LineageNode): string {
         <span style="font-size:10px;color:#a1a1aa;text-transform:uppercase;letter-spacing:.04em">${kind}</span>
         ${badge}
       </div>
+      ${dateLine}
       <p style="margin:0;font-size:11px;line-height:1.45;color:#52525b">${desc}</p>
       <div id="lg-usage" style="margin-top:6px;font-size:11px;color:#71717a"></div>
-      ${src ? `<div style="margin-top:6px">${src}</div>` : ''}
+      ${linksHtml}
     </div>`;
 }
 
@@ -216,6 +233,7 @@ export default function LineageGraph({
   rootId,
   layout,
   imageUrl,
+  imageDimensions,
   showLinkLabels = false,
   className,
 }: {
@@ -226,6 +244,7 @@ export default function LineageGraph({
   rootId: string;
   layout: LayoutMode;
   imageUrl?: string | null;
+  imageDimensions?: { w: number; h: number };
   showLinkLabels?: boolean;
   className?: string;
 }) {
@@ -273,6 +292,15 @@ export default function LineageGraph({
       svg.selectAll('*').remove();
       if (!width || !height) return;
 
+      // Closure vars populated inside the timeline block; zoom handler reads them.
+      let yearXByYear = new Map<number, number>();
+      let yearStripLayer: d3.Selection<SVGGElement, unknown, null, undefined> | null = null;
+
+      const zoomBounds = () => {
+        const t = zoomRef.current;
+        return { w: width / t.k, h: height / t.k, minX: -t.x / t.k, minY: -t.y / t.k };
+      };
+
       const visible = computeVisible(index, expanded, rootId);
       const depth = depthsFrom(index, visible, rootId);
       const maxDepth = Math.max(1, ...depth.values());
@@ -280,17 +308,53 @@ export default function LineageGraph({
       // ── Layout target positions ──────────────────────────────────────────
       const marginR = 90;
       const marginL = 70;
-      const colGap = layout === 'force' ? 0 : (width - marginL - marginR) / maxDepth;
+      const colGap =
+        layout === 'force' || layout === 'timeline'
+          ? 0
+          : (width - marginL - marginR) / maxDepth;
       const colX = (d: number) => width - marginR - d * colGap;
 
       const bandOrder = new Map(GRAPH_TYPES.map((t, i) => [t, i]));
       const bandGap = (height - 80) / GRAPH_TYPES.length;
       const bandY = (t: string) => 50 + (bandOrder.get(t) ?? 0) * bandGap + bandGap / 2;
 
+      // ── Timeline variables (computed always, used when layout==='timeline') ──
+      const yearOf = (id: string) => index.nodeById.get(id)?.year ?? 2020;
+      const visYears = [...visible].filter((id) => id !== rootId).map(yearOf);
+
+      // Density-based x mapping: years with more nodes get proportionally more space.
+      const yearCounts = new Map<number, number>();
+      for (const id of visible) {
+        if (id === rootId) continue;
+        const yr = yearOf(id);
+        yearCounts.set(yr, (yearCounts.get(yr) ?? 0) + 1);
+      }
+      const uniqueYearsSorted = [...new Set(visYears)].sort((a, b) => a - b);
+      const MIN_SLICE = 1.5;
+      const totalYearWeight = uniqueYearsSorted.reduce(
+        (s, yr) => s + Math.max(MIN_SLICE, yearCounts.get(yr) ?? 0),
+        0
+      );
+      const availTimeW = width - marginL - marginR - 80;
+      let cumYearW = 0;
+      for (const yr of uniqueYearsSorted) {
+        yearXByYear.set(yr, marginL + (cumYearW / Math.max(1, totalYearWeight)) * availTimeW);
+        cumYearW += Math.max(MIN_SLICE, yearCounts.get(yr) ?? 0);
+      }
+      const timeX = (year: number) => yearXByYear.get(year) ?? marginL;
+
       const nodes: SimNode[] = [...visible].map((id) => {
         const base = index.nodeById.get(id)!;
         const prev = posRef.current.get(id);
-        const seedX = prev?.x ?? (layout === 'force' ? width / 2 : colX(depth.get(id) ?? 1));
+        const seedX =
+          prev?.x ??
+          (layout === 'force'
+            ? width / 2
+            : layout === 'timeline'
+            ? id === rootId
+              ? width - marginR
+              : timeX(yearOf(id))
+            : colX(depth.get(id) ?? 1));
         const seedY = prev?.y ?? (layout === 'layers' ? bandY(base.type) : height / 2);
         return { ...base, x: seedX, y: seedY };
       });
@@ -299,23 +363,47 @@ export default function LineageGraph({
         .filter((l) => visible.has(l.source) && visible.has(l.target))
         .map((l) => ({ source: l.source, target: l.target, label: l.label, verified: l.verified }));
 
-      const ROOT_R = 30;
       const degree = (id: string) => index.neighbours.get(id)?.size ?? 0;
-      const radius = (d: SimNode) => (d.type === 'root' ? ROOT_R : 9 + Math.min(6, degree(d.id)));
+
+      // Direct (non-root) neighbours of the root get a slightly larger radius.
+      const immediateNeighborIds = new Set(
+        [...(index.neighbours.get(rootId) ?? [])].filter(
+          (id) => index.nodeById.get(id)?.type !== 'root'
+        )
+      );
+
+      // ── Image root dimensions (aspect-ratio-correct rect) ────────────────
+      let imageRootW = 80;
+      let imageRootH = 80;
+      if (imageDimensions) {
+        const { w, h } = imageDimensions;
+        const scale = ROOT_MAX_SIZE / Math.max(w, h);
+        imageRootW = Math.round(w * scale);
+        imageRootH = Math.round(h * scale);
+      }
+      const rootEffR = Math.max(imageRootW, imageRootH) / 2 + 4;
+
+      const rootHasImage = (d: SimNode) => d.type === 'root' && !!imageUrl;
+
+      const radius = (d: SimNode): number => {
+        if (d.type === 'root') return rootHasImage(d) ? rootEffR : ROOT_R;
+        if (immediateNeighborIds.has(d.id)) return 15;
+        return 9 + Math.min(6, degree(d.id));
+      };
 
       // ── SVG scaffold ──────────────────────────────────────────────────────
       const defs = svg.append('defs');
-      defs
-        .append('filter')
-        .attr('id', 'cluster-blur')
-        .append('feGaussianBlur')
-        .attr('stdDeviation', 10);
+      defs.append('filter').attr('id', 'cluster-blur').append('feGaussianBlur').attr('stdDeviation', 10);
       if (imageUrl) {
         defs
           .append('clipPath')
           .attr('id', 'root-clip')
-          .append('circle')
-          .attr('r', ROOT_R);
+          .append('rect')
+          .attr('x', -imageRootW / 2)
+          .attr('y', -imageRootH / 2)
+          .attr('width', imageRootW)
+          .attr('height', imageRootH)
+          .attr('rx', 3);
       }
 
       const root = svg.append('g');
@@ -323,12 +411,35 @@ export default function LineageGraph({
       const linkLayer = root.append('g');
       const nodeLayer = root.append('g');
 
+
+      // simRef lets the zoom handler kick the sim without requiring sim to be
+      // defined before zoom is set up.
+      let simRef: d3.Simulation<SimNode, SimLink> | null = null;
+
       const zoom = d3
         .zoom<SVGSVGElement, unknown>()
         .scaleExtent([0.2, 4])
         .on('zoom', (e) => {
           zoomRef.current = e.transform;
           root.attr('transform', e.transform.toString());
+          // Always kick the sim so nodes re-settle into any newly revealed space.
+          if (simRef) simRef.alpha(Math.max(simRef.alpha(), 0.15)).restart();
+          // Reposition year strip labels to stay fixed at top of frame.
+          if (yearStripLayer) {
+            yearStripLayer.selectAll<SVGTextElement, number>('text')
+              .attr('x', (yr) => e.transform.x + (yearXByYear.get(yr) ?? 0) * e.transform.k)
+              .attr('visibility', (yr) => {
+                const sx = e.transform.x + (yearXByYear.get(yr) ?? 0) * e.transform.k;
+                return sx >= 10 && sx <= width - 10 ? 'visible' : 'hidden';
+              });
+            yearStripLayer.selectAll<SVGLineElement, number>('line')
+              .attr('x1', (yr) => e.transform.x + (yearXByYear.get(yr) ?? 0) * e.transform.k)
+              .attr('x2', (yr) => e.transform.x + (yearXByYear.get(yr) ?? 0) * e.transform.k)
+              .attr('visibility', (yr) => {
+                const sx = e.transform.x + (yearXByYear.get(yr) ?? 0) * e.transform.k;
+                return sx >= 10 && sx <= width - 10 ? 'visible' : 'hidden';
+              });
+          }
         });
       svg.call(zoom);
       svg.call(zoom.transform, zoomRef.current);
@@ -364,24 +475,40 @@ export default function LineageGraph({
             .attr('text-anchor', 'middle')
         : null;
 
+      // ── Hide timer for popup hover-stay ───────────────────────────────────
+      let hideTimer: ReturnType<typeof setTimeout> | null = null;
+
+      function scheduleHide() {
+        hideTimer = setTimeout(() => {
+          selectedRef.current = null;
+          updatePopup();
+        }, 100);
+      }
+
+      function cancelHide() {
+        if (hideTimer !== null) {
+          clearTimeout(hideTimer);
+          hideTimer = null;
+        }
+      }
+
       const node = nodeLayer
         .selectAll<SVGGElement, SimNode>('g')
         .data(nodes, (d) => d.id)
         .join('g')
         .attr('cursor', 'pointer')
-        // Click expands/collapses; the description card is hover-only so it
-        // never lingers or needs a second click to dismiss.
         .on('click', (event, d) => {
           event.stopPropagation();
+          scheduleHide();
           onToggleRef.current(d.id);
         })
         .on('mouseenter', (_event, d) => {
+          cancelHide();
           selectedRef.current = d.id;
           updatePopup();
         })
         .on('mouseleave', () => {
-          selectedRef.current = null;
-          updatePopup();
+          scheduleHide();
         });
 
       // Halo marks a node with something left to reveal.
@@ -394,13 +521,11 @@ export default function LineageGraph({
         .attr('stroke-width', 1)
         .attr('opacity', 0.3);
 
-      const rootHasImage = (d: SimNode) => d.type === 'root' && !!imageUrl;
+      // ── Node bodies ───────────────────────────────────────────────────────
 
-      // Node body. Verified → solid fill + white icon. Unverified → white fill,
-      // dashed coloured stroke, coloured icon. Root-with-image gets the actual
-      // render clipped to a circle, with a ring drawn over it.
+      // Standard nodes (no image, no photo).
       node
-        .filter((d) => !rootHasImage(d))
+        .filter((d) => !rootHasImage(d) && !d.photoUrl)
         .append('circle')
         .attr('r', radius)
         .attr('fill', (d) => (d.verified === false ? '#fff' : TYPE_COLORS[d.type]))
@@ -408,27 +533,62 @@ export default function LineageGraph({
         .attr('stroke-width', (d) => (d.type === 'root' ? 2 : 1.5))
         .attr('stroke-dasharray', (d) => (d.verified === false ? '3,2' : null));
 
+      // Root with dropped image: rect clip, actual aspect ratio, no ring circle.
       const rootWithImg = node.filter((d) => rootHasImage(d));
       rootWithImg
         .append('image')
         .attr('href', imageUrl!)
-        .attr('x', -ROOT_R)
-        .attr('y', -ROOT_R)
-        .attr('width', ROOT_R * 2)
-        .attr('height', ROOT_R * 2)
+        .attr('x', -imageRootW / 2)
+        .attr('y', -imageRootH / 2)
+        .attr('width', imageRootW)
+        .attr('height', imageRootH)
         .attr('preserveAspectRatio', 'xMidYMid slice')
         .attr('clip-path', 'url(#root-clip)')
         .attr('pointer-events', 'none');
       rootWithImg
-        .append('circle')
-        .attr('r', ROOT_R)
+        .append('rect')
+        .attr('x', -imageRootW / 2)
+        .attr('y', -imageRootH / 2)
+        .attr('width', imageRootW)
+        .attr('height', imageRootH)
+        .attr('rx', 3)
         .attr('fill', 'none')
         .attr('stroke', TYPE_COLORS.root)
-        .attr('stroke-width', 2.5);
+        .attr('stroke-width', 2);
 
-      // Type icon (skip root when it shows an image).
+      // Nodes with a photo (person/org): circular crop with coloured ring.
+      const photoNodes = node.filter((d) => !rootHasImage(d) && !!d.photoUrl);
+      photoNodes.each(function (d) {
+        const g = d3.select(this);
+        const r = radius(d);
+        const clipId = `photo-clip-${d.id.replace(/[^a-z0-9]/gi, '_')}`;
+        defs
+          .append('clipPath')
+          .attr('id', clipId)
+          .append('circle')
+          .attr('r', r);
+        // White backing so transparent areas of the photo look clean.
+        g.append('circle').attr('r', r).attr('fill', '#fff');
+        g.append('image')
+          .attr('href', d.photoUrl!)
+          .attr('x', -r)
+          .attr('y', -r)
+          .attr('width', r * 2)
+          .attr('height', r * 2)
+          .attr('preserveAspectRatio', 'xMidYMid slice')
+          .attr('clip-path', `url(#${clipId})`)
+          .attr('pointer-events', 'none');
+        // Coloured ring on top to keep category colour visible.
+        g.append('circle')
+          .attr('r', r)
+          .attr('fill', 'none')
+          .attr('stroke', TYPE_COLORS[d.type])
+          .attr('stroke-width', 2);
+      });
+
+      // Type icon (skip root-with-image and photo nodes).
       node
-        .filter((d) => !rootHasImage(d) && !!TYPE_ICONS[d.type])
+        .filter((d) => !rootHasImage(d) && !d.photoUrl && !!TYPE_ICONS[d.type])
         .append('path')
         .attr('d', (d) => TYPE_ICONS[d.type])
         .attr('transform', (d) => {
@@ -458,7 +618,7 @@ export default function LineageGraph({
 
       // ── Popup (foreignObject rides along with pan/zoom & ticks) ───────────
       const CARD_W = 224;
-      const CARD_H = 150;
+      const CARD_H = 220;
       const popup = root
         .append('foreignObject')
         .attr('width', CARD_W + 16)
@@ -473,7 +633,11 @@ export default function LineageGraph({
         .style('border-radius', '4px')
         .style('box-shadow', '0 4px 16px rgba(0,0,0,.10)')
         .style('padding', '10px 12px')
-        .style('width', `${CARD_W}px`);
+        .style('width', `${CARD_W}px`)
+        .style('pointer-events', 'all')
+        .style('cursor', 'default')
+        .on('mouseenter', cancelHide)
+        .on('mouseleave', scheduleHide);
 
       function updatePopup() {
         const id = selectedRef.current;
@@ -503,41 +667,140 @@ export default function LineageGraph({
         popup.attr('x', x).attr('y', y);
       }
 
-      // ── Forces per layout ─────────────────────────────────────────────────
+      // ── Link distance / strength (root links treated differently) ─────────
       const span = Math.sqrt(width * height);
-      const sim = d3.forceSimulation(nodes).velocityDecay(0.35).alphaDecay(0.028);
+      const normalLinkDistance =
+        layout === 'force'
+          ? Math.max(60, Math.min(150, span / 8))
+          : layout === 'timeline'
+          ? 80
+          : colGap * 0.9;
+      const normalLinkStrength = layout === 'force' ? 0.45 : 0.15;
+
+      const linkDistance = (l: SimLink) => {
+        const src = l.source as SimNode;
+        const tgt = l.target as SimNode;
+        return src.type === 'root' || tgt.type === 'root' ? 55 : normalLinkDistance;
+      };
+      const linkStrength = (l: SimLink) => {
+        const src = l.source as SimNode;
+        const tgt = l.target as SimNode;
+        return src.type === 'root' || tgt.type === 'root' ? 0.6 : normalLinkStrength;
+      };
+
+      // ── Forces per layout ─────────────────────────────────────────────────
+      const sim = d3
+        .forceSimulation<SimNode, SimLink>(nodes)
+        .velocityDecay(0.45)
+        .alphaDecay(0.03)
+        .alpha(0.7);
+      simRef = sim;
 
       if (layout === 'force') {
         sim
           .force(
             'link',
-            d3.forceLink<SimNode, SimLink>(links).id((d) => d.id).distance(Math.max(60, Math.min(150, span / 8))).strength(0.45)
+            d3
+              .forceLink<SimNode, SimLink>(links)
+              .id((d) => d.id)
+              .distance(linkDistance)
+              .strength(linkStrength)
           )
           .force('charge', d3.forceManyBody().strength(-Math.max(320, (width * height) / 2200)))
           .force('center', d3.forceCenter(width / 2, height / 2))
-          .force('collide', d3.forceCollide<SimNode>().radius((d) => radius(d) + 14 + Math.min(46, d.label.length * 1.5)))
-          .force('bounds', boundsForce(() => ({ w: width, h: height }), radius));
+          .force(
+            'collide',
+            d3
+              .forceCollide<SimNode>()
+              .radius((d) => radius(d) + 14 + Math.min(46, d.label.length * 1.5))
+          )
+          .force('bounds', boundsForce(zoomBounds, radius));
+      } else if (layout === 'timeline') {
+        sim
+          .force(
+            'link',
+            d3
+              .forceLink<SimNode, SimLink>(links)
+              .id((d) => d.id)
+              .distance(linkDistance)
+              .strength(linkStrength)
+          )
+          .force(
+            'x',
+            d3
+              .forceX<SimNode>((d) =>
+                d.type === 'root' ? width - marginR : timeX(yearOf(d.id))
+              )
+              .strength(0.85)
+          )
+          .force(
+            'y',
+            d3
+              .forceY<SimNode>((d) =>
+                d.type === 'root' ? height / 2 : bandY(d.type)
+              )
+              .strength(0.25)
+          )
+          .force('charge', d3.forceManyBody().strength(-200))
+          .force('collide', d3.forceCollide<SimNode>().radius((d) => radius(d) + 12))
+          .force('bounds', boundsForce(zoomBounds, radius));
+
+        // Fixed year strip: appended to the SVG (outside root) so it stays at
+        // the top of the frame regardless of pan/zoom. The zoom handler updates
+        // each label's x position so they spread/compress with the graph.
+        yearStripLayer = svg.append('g');
+        yearStripLayer.append('rect')
+          .attr('x', 0).attr('y', 0)
+          .attr('width', width).attr('height', 22)
+          .attr('fill', 'rgba(255,255,255,0.88)');
+        for (const yr of uniqueYearsSorted) {
+          const svgX = yearXByYear.get(yr) ?? 0;
+          const initScreenX = zoomRef.current.x + svgX * zoomRef.current.k;
+          const visible = initScreenX >= 10 && initScreenX <= width - 10;
+          yearStripLayer.append('line')
+            .datum(yr)
+            .attr('x1', initScreenX).attr('y1', 6)
+            .attr('x2', initScreenX).attr('y2', 14)
+            .attr('stroke', '#d4d4d8').attr('stroke-width', 0.5)
+            .attr('visibility', visible ? 'visible' : 'hidden');
+          yearStripLayer.append('text')
+            .datum(yr)
+            .attr('x', initScreenX).attr('y', 12)
+            .attr('text-anchor', 'middle')
+            .attr('font-size', 9).attr('fill', '#a1a1aa')
+            .attr('visibility', visible ? 'visible' : 'hidden')
+            .text(String(yr));
+        }
       } else {
         // flow + layers both pin x by depth (root on the right). layers also
         // pins y to a per-type band; flow lets y settle with a gentle centre.
         sim
-          .force('link', d3.forceLink<SimNode, SimLink>(links).id((d) => d.id).distance(colGap * 0.9).strength(0.15))
+          .force(
+            'link',
+            d3
+              .forceLink<SimNode, SimLink>(links)
+              .id((d) => d.id)
+              .distance(linkDistance)
+              .strength(linkStrength)
+          )
           .force('x', d3.forceX<SimNode>((d) => colX(depth.get(d.id) ?? 1)).strength(0.9))
           .force(
             'y',
             layout === 'layers'
-              ? d3.forceY<SimNode>((d) => (d.type === 'root' ? height / 2 : bandY(d.type))).strength(0.9)
+              ? d3
+                  .forceY<SimNode>((d) => (d.type === 'root' ? height / 2 : bandY(d.type)))
+                  .strength(0.9)
               : d3.forceY<SimNode>(height / 2).strength(0.06)
           )
           .force('charge', d3.forceManyBody().strength(layout === 'layers' ? -120 : -220))
           .force('collide', d3.forceCollide<SimNode>().radius((d) => radius(d) + 10))
-          .force('bounds', boundsForce(() => ({ w: width, h: height }), radius));
+          .force('bounds', boundsForce(zoomBounds, radius));
       }
 
-      // Anchor the render on the right in the directed layouts.
+      // Anchor the render on the right in directed layouts.
       const rootNode = nodes.find((n) => n.id === rootId);
       if (rootNode && layout !== 'force') {
-        rootNode.fx = colX(0);
+        rootNode.fx = colX(0); // for timeline colGap=0, so colX(0) = width - marginR
         rootNode.fy = height / 2;
       }
 
@@ -579,7 +842,7 @@ export default function LineageGraph({
         d3
           .drag<SVGGElement, SimNode>()
           .on('start', (event, d) => {
-            if (!event.active) sim.alphaTarget(0.25).restart();
+            if (!event.active) sim.alphaTarget(0.12).restart();
             d.fx = d.x;
             d.fy = d.y;
           })
@@ -599,7 +862,7 @@ export default function LineageGraph({
 
       return () => sim.stop();
     },
-    [index, allLinks, expanded, rootId, layout, imageUrl, showLinkLabels, linkPhrase]
+    [index, allLinks, expanded, rootId, layout, imageUrl, imageDimensions, showLinkLabels, linkPhrase]
   );
 
   useEffect(() => {
