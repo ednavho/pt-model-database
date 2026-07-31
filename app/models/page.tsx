@@ -1,10 +1,7 @@
-import FilterDropdown from '@/components/models/FilterDropdown';
 import ModelsList from '@/components/models/ModelsList';
 import { MODEL_CATEGORIES } from '@/types/database';
 import { isInternalUser } from '@/utils/auth';
 import { createClient } from '@/utils/supabase/server';
-import Link from 'next/link';
-import { Suspense } from 'react';
 
 interface SearchParams {
   category?: string;
@@ -45,17 +42,20 @@ export default async function ModelsPage({
   const selectedStatuses = status ? status.split(',').filter(Boolean) : [];
   const sortDesc = sort === 'desc';
 
-  let query = supabase
-    .from('models')
-    .select(
-      'id,category_id,name,file_name,download_url,attribution,attribution_url,license,data_provenance_notes,size_bytes,vetting_status_id,used_by_workflows,created_at,updated_at,model_categories!inner(name),vetting_statuses!inner(name)'
-    )
-    .order('name', { ascending: !sortDesc });
-
-  if (selectedCategories.length > 0) query = query.in('model_categories.name', selectedCategories);
-  if (selectedStatuses.length > 0) query = query.in('vetting_statuses.name', selectedStatuses);
-
-  const { data: models, error } = await query;
+  const [{ count: totalCount }, { data: models, error }] = await Promise.all([
+    supabase.from('models').select('*', { count: 'exact', head: true }),
+    (() => {
+      let q = supabase
+        .from('models')
+        .select(
+          'id,category_id,name,file_name,download_url,attribution,attribution_url,license,data_provenance_notes,size_bytes,vetting_status_id,used_by_workflows,created_at,updated_at,model_categories!inner(name),vetting_statuses!inner(name)'
+        )
+        .order('name', { ascending: !sortDesc });
+      if (selectedCategories.length > 0) q = q.in('model_categories.name', selectedCategories);
+      if (selectedStatuses.length > 0) q = q.in('vetting_statuses.name', selectedStatuses);
+      return q;
+    })(),
+  ]);
 
   return (
     <div className="px-6 pt-10 pb-6">
@@ -69,34 +69,6 @@ export default async function ModelsPage({
         </p>
       </div>
 
-      {/* Filter row */}
-      <div className="flex items-center gap-2 mb-6">
-        <Suspense fallback={<div className="h-[35px] w-[150px] rounded-[8px] bg-zinc-50 border border-[#E9E9E9]" />}>
-          <FilterDropdown
-            dropdownLabel="Type"
-            options={MODEL_CATEGORIES.map((c) => ({ value: c, label: CATEGORY_LABELS[c] ?? c }))}
-            selected={selectedCategories}
-            paramName="category"
-          />
-        </Suspense>
-        <Suspense fallback={<div className="h-[35px] w-[150px] rounded-[8px] bg-zinc-50 border border-[#E9E9E9]" />}>
-          <FilterDropdown
-            dropdownLabel="Status"
-            options={VETTING_STATUSES.map((s) => ({ value: s, label: STATUS_LABELS[s] ?? s }))}
-            selected={selectedStatuses}
-            paramName="status"
-          />
-        </Suspense>
-        {internal && (
-          <Link
-            href="/models/new"
-            className="ml-auto text-[13px] border border-[#E9E9E9] rounded-[8px] px-3 py-[7px] text-zinc-700 hover:border-zinc-400 transition-colors"
-          >
-            + Add Model
-          </Link>
-        )}
-      </div>
-
       {/* Error */}
       {error && (
         <div className="border border-red-200 bg-red-50 text-red-700 text-[13px] px-4 py-3 rounded-[8px] mb-6">
@@ -105,7 +77,15 @@ export default async function ModelsPage({
       )}
 
       {/* Table with client-side search */}
-      <ModelsList models={(models ?? []) as any} />
+      <ModelsList
+        models={(models ?? []) as any}
+        totalCount={totalCount ?? 0}
+        selectedCategories={selectedCategories}
+        selectedStatuses={selectedStatuses}
+        categoryOptions={MODEL_CATEGORIES.map((c) => ({ value: c, label: CATEGORY_LABELS[c] ?? c }))}
+        statusOptions={VETTING_STATUSES.map((s) => ({ value: s, label: STATUS_LABELS[s] ?? s }))}
+        internal={internal}
+      />
     </div>
   );
 }

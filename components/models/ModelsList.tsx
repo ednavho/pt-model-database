@@ -1,9 +1,10 @@
 'use client';
 
-import { useState } from 'react';
+import { Suspense, useState } from 'react';
 import Link from 'next/link';
 import VettingBadge from '@/components/ui/VettingBadge';
 import { VettingStatus } from '@/types/database';
+import FilterDropdown from '@/components/models/FilterDropdown';
 
 type ModelRow = {
   id: string;
@@ -15,6 +16,8 @@ type ModelRow = {
   model_categories: { name: string } | null;
   vetting_statuses: { name: string } | null;
 };
+
+type FilterOption = { value: string; label: string };
 
 const LABELS: Record<string, string> = {
   checkpoints: 'Checkpoint',
@@ -42,7 +45,32 @@ function DownloadIcon() {
   );
 }
 
-export default function ModelsList({ models }: { models: ModelRow[] }) {
+function SearchIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="11" cy="11" r="8" />
+      <path d="m21 21-4.35-4.35" />
+    </svg>
+  );
+}
+
+export default function ModelsList({
+  models,
+  totalCount,
+  selectedCategories,
+  selectedStatuses,
+  categoryOptions,
+  statusOptions,
+  internal,
+}: {
+  models: ModelRow[];
+  totalCount: number;
+  selectedCategories: string[];
+  selectedStatuses: string[];
+  categoryOptions: FilterOption[];
+  statusOptions: FilterOption[];
+  internal: boolean;
+}) {
   const [search, setSearch] = useState('');
 
   const filtered = search.trim()
@@ -54,14 +82,43 @@ export default function ModelsList({ models }: { models: ModelRow[] }) {
 
   return (
     <>
-      <div className="mb-5">
-        <input
-          type="text"
-          placeholder="Search"
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          className="border border-[#E9E9E9] rounded-[8px] px-3 py-[7px] text-[14px] outline-none focus:border-[#B0B0B0] bg-white w-full transition-colors"
-        />
+      <div className="flex items-center gap-2 mb-4">
+        <Suspense fallback={<div className="h-8 w-[120px] rounded-[8px] bg-zinc-50 border border-[#E9E9E9]" />}>
+          <FilterDropdown
+            dropdownLabel="Type"
+            options={categoryOptions}
+            selected={selectedCategories}
+            paramName="category"
+          />
+        </Suspense>
+        <Suspense fallback={<div className="h-8 w-[120px] rounded-[8px] bg-zinc-50 border border-[#E9E9E9]" />}>
+          <FilterDropdown
+            dropdownLabel="Status"
+            options={statusOptions}
+            selected={selectedStatuses}
+            paramName="status"
+          />
+        </Suspense>
+        <div className="relative flex-1">
+          <div className="absolute inset-y-0 left-3 flex items-center pointer-events-none text-[#939393]">
+            <SearchIcon />
+          </div>
+          <input
+            type="text"
+            placeholder="Search"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            className="border border-[#E9E9E9] rounded-[8px] pl-8 pr-3 py-[7px] text-[14px] outline-none focus:border-[#B0B0B0] bg-white w-full transition-colors"
+          />
+        </div>
+        {internal && (
+          <Link
+            href="/models/new"
+            className="shrink-0 text-[13px] border border-[#E9E9E9] rounded-[8px] px-3 py-[7px] text-zinc-700 hover:border-zinc-400 transition-colors"
+          >
+            + Add Model
+          </Link>
+        )}
       </div>
 
       <div className="border border-[#E9E9E9] rounded-[8px] overflow-x-auto">
@@ -133,7 +190,9 @@ export default function ModelsList({ models }: { models: ModelRow[] }) {
 
       {filtered.length > 0 && (
         <p className="text-[12px] text-zinc-400 mt-3 text-right">
-          {filtered.length} model{filtered.length !== 1 ? 's' : ''}
+          {filtered.length < totalCount
+            ? `${filtered.length} out of ${totalCount} models shown`
+            : `${filtered.length} model${filtered.length !== 1 ? 's' : ''}`}
         </p>
       )}
     </>
