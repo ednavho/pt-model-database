@@ -1,9 +1,15 @@
 'use client';
 
 import VettingBadge from '@/components/ui/VettingBadge';
+import { MODEL_FILE_TO_NODE, lineageLinks, lineageNodes, type LineageLink, type LineageNode } from '@/data/lineageData';
 import type { VettingStatus } from '@/types/database';
 import { cn } from '@/utils/cn';
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useMemo, useRef, useState } from 'react';
+import LineageGraph, { LayoutMode, buildIndex, computeVisible } from '../lineage-sketch/LineageGraph';
+
+// ── Types ────────────────────────────────────────────────────────────────────
+
+type Tab = 'environmental' | 'provenance';
 
 type EnvironmentalData = {
   energy_kwh?: number | null;
@@ -30,7 +36,6 @@ type Requirement = {
   provenance: Provenance | null;
 };
 
-/** One direct relationship of a model — a dataset, paper, or another model. */
 type LineageItem = {
   id: string;
   relationship_label: string;
@@ -39,42 +44,25 @@ type LineageItem = {
   related_name: string;
 };
 
-/**
- * A requirement after its pointer has been looked up. The database is always
- * preferred — it's the living record and may have been corrected since the
- * image was made — with the copy baked into the file as the fallback.
- */
 type Resolved = Requirement & {
   source: 'database' | 'embedded' | 'none';
   data: Provenance;
   name: string | null;
-  /** Pointer was present but the record couldn't be fetched. */
   pointerBroken: boolean;
-  /** Direct relationships only — one hop, never walked recursively. */
   lineage: LineageItem[];
 };
 
 type ParseResult =
-  | {
-      kind: 'ok';
-      raw: Record<string, unknown>;
-      env: EnvironmentalData | null;
-      requirements: Requirement[];
-    }
+  | { kind: 'ok'; raw: Record<string, unknown>; env: EnvironmentalData | null; requirements: Requirement[] }
   | { kind: 'no-chunk' }
   | { kind: 'not-png' }
   | { kind: 'parse-error'; message: string };
 
-// ── PNG parsing ─────────────────────────────────────────────────────────────
+// ── PNG parsing ──────────────────────────────────────────────────────────────
 
-/** A field may be a nested JSON string or an already-decoded object. */
 function decodeField(value: unknown): unknown {
   if (typeof value !== 'string') return value;
-  try {
-    return JSON.parse(value);
-  } catch {
-    return null;
-  }
+  try { return JSON.parse(value); } catch { return null; }
 }
 
 function readEnvironmental(rec: Record<string, unknown>): EnvironmentalData | null {
@@ -98,18 +86,13 @@ function toRequirement(v: unknown): Requirement | null {
   };
 }
 
-/**
- * The workflow is expected under `Workflow`, but tolerate it sitting at the
- * top level or one level deeper rather than silently showing nothing.
- */
-function readRequirements(rec: Record<string, unknown>): Requirement[] {
+function readRequirementsFromRecord(rec: Record<string, unknown>): Requirement[] {
   const collect = (v: unknown): Requirement[] | null => {
     if (!v || typeof v !== 'object') return null;
     const list = (v as Record<string, unknown>)['endpoint_requirements'];
     if (!Array.isArray(list)) return null;
     return list.map(toRequirement).filter((r): r is Requirement => r !== null);
   };
-
   return (
     collect(rec) ??
     collect(decodeField(rec['Workflow'])) ??
@@ -120,107 +103,59 @@ function readRequirements(rec: Record<string, unknown>): Requirement[] {
 
 function parsePng(buffer: ArrayBuffer): ParseResult {
   const bytes = new Uint8Array(buffer);
-
   const PNG_SIG = [137, 80, 78, 71, 13, 10, 26, 10];
   for (let i = 0; i < 8; i++) {
     if (bytes[i] !== PNG_SIG[i]) return { kind: 'not-png' };
   }
-
   const decoder = new TextDecoder('latin1');
   let offset = 8;
-
   while (offset + 12 <= bytes.length) {
-    const length =
-      ((bytes[offset] << 24) |
-        (bytes[offset + 1] << 16) |
-        (bytes[offset + 2] << 8) |
-        bytes[offset + 3]) >>>
-      0;
+    const length = ((bytes[offset] << 24) | (bytes[offset + 1] << 16) | (bytes[offset + 2] << 8) | bytes[offset + 3]) >>> 0;
     offset += 4;
-
     const type = decoder.decode(bytes.subarray(offset, offset + 4));
     offset += 4;
-
     if (type === 'tEXt') {
       const data = bytes.subarray(offset, offset + length);
-
       let nullIdx = -1;
-      for (let i = 0; i < data.length; i++) {
-        if (data[i] === 0) {
-          nullIdx = i;
-          break;
-        }
-      }
-
+      for (let i = 0; i < data.length; i++) { if (data[i] === 0) { nullIdx = i; break; } }
       if (nullIdx !== -1) {
         const keyword = decoder.decode(data.subarray(0, nullIdx));
         if (keyword.startsWith('pseudorandom_v')) {
           const text = decoder.decode(data.subarray(nullIdx + 1));
           try {
             const outer = JSON.parse(text);
-            if (outer === null || typeof outer !== 'object') {
-              return { kind: 'ok', raw: {}, env: null, requirements: [] };
-            }
+            if (outer === null || typeof outer !== 'object') return { kind: 'ok', raw: {}, env: null, requirements: [] };
             const rec = outer as Record<string, unknown>;
-            return {
-              kind: 'ok',
-              raw: rec,
-              env: readEnvironmental(rec),
-              requirements: readRequirements(rec),
-            };
+            return { kind: 'ok', raw: rec, env: readEnvironmental(rec), requirements: readRequirementsFromRecord(rec) };
           } catch (e) {
-            return {
-              kind: 'parse-error',
-              message: e instanceof Error ? e.message : 'JSON parse failed',
-            };
+            return { kind: 'parse-error', message: e instanceof Error ? e.message : 'JSON parse failed' };
           }
         }
       }
     }
-
-    // Skip chunk data + 4-byte CRC
     offset += length + 4;
     if (type === 'IEND') break;
   }
-
   return { kind: 'no-chunk' };
 }
 
-// ── Pointer resolution ──────────────────────────────────────────────────────
+// ── Pointer resolution ───────────────────────────────────────────────────────
 
 async function resolveRequirements(reqs: Requirement[]): Promise<Resolved[]> {
   const ids = [...new Set(reqs.map((r) => r.provenance_id).filter(Boolean))] as string[];
-
-  // Details and lineage are independent lookups — fetch them together rather
-  // than making the page wait for one and then the other.
   const [records, lineages] = await Promise.all([
-    Promise.all(
-      ids.map((id) =>
-        fetch(`/api/models/${id}`)
-          .then((r) => (r.ok ? r.json() : null))
-          .catch(() => null)
-      )
-    ),
-    Promise.all(
-      ids.map((id) =>
-        fetch(`/api/models/${id}/lineage`)
-          .then((r) => (r.ok ? r.json() : []))
-          .catch(() => [])
-      )
-    ),
+    Promise.all(ids.map((id) => fetch(`/api/models/${id}`).then((r) => (r.ok ? r.json() : null)).catch(() => null))),
+    Promise.all(ids.map((id) => fetch(`/api/models/${id}/lineage`).then((r) => (r.ok ? r.json() : [])).catch(() => []))),
   ]);
-
   const byId = new Map<string, Record<string, unknown>>();
   const lineageById = new Map<string, LineageItem[]>();
   ids.forEach((id, i) => {
     if (records[i]) byId.set(id, records[i]);
     if (Array.isArray(lineages[i])) lineageById.set(id, lineages[i]);
   });
-
   return reqs.map((r) => {
     const lineage = r.provenance_id ? (lineageById.get(r.provenance_id) ?? []) : [];
     const db = r.provenance_id ? byId.get(r.provenance_id) : undefined;
-
     if (db) {
       return {
         ...r,
@@ -239,21 +174,48 @@ async function resolveRequirements(reqs: Requirement[]): Promise<Resolved[]> {
         },
       };
     }
-
     const embedded = r.provenance ?? {};
     const hasAny = Object.values(embedded).some((v) => v !== null && v !== undefined && v !== '');
-    return {
-      ...r,
-      source: hasAny ? ('embedded' as const) : ('none' as const),
-      name: null,
-      pointerBroken: r.provenance_id !== null,
-      lineage,
-      data: embedded,
-    };
+    return { ...r, source: hasAny ? ('embedded' as const) : ('none' as const), name: null, pointerBroken: r.provenance_id !== null, lineage, data: embedded };
   });
 }
 
-// ── Display helpers ─────────────────────────────────────────────────────────
+// ── Graph building ────────────────────────────────────────────────────────────
+
+const DROPPED_ROOT = '__image_inspector__';
+const KNOWN_NODE_IDS = new Set(lineageNodes.map((n) => n.id));
+
+function buildGraphFromRequirements(
+  fileName: string,
+  requirements: Requirement[]
+): { extraNodes: LineageNode[]; extraLinks: LineageLink[] } {
+  const extraNodes: LineageNode[] = [{ id: DROPPED_ROOT, label: fileName, type: 'root' }];
+  const extraLinks: LineageLink[] = [];
+  const linked = new Set<string>();
+
+  for (const r of requirements) {
+    const key = r.requirement;
+    const nodeId = MODEL_FILE_TO_NODE[key] ?? (KNOWN_NODE_IDS.has(key) ? key : null);
+
+    if (nodeId) {
+      if (!linked.has(nodeId)) {
+        extraLinks.push({ source: DROPPED_ROOT, target: nodeId, label: 'requires', verified: true });
+        linked.add(nodeId);
+      }
+    } else {
+      const synthetic = `unmapped:${r.requirement}`;
+      if (!linked.has(synthetic)) {
+        extraNodes.push({ id: synthetic, label: r.requirement, type: 'model', verified: false });
+        extraLinks.push({ source: DROPPED_ROOT, target: synthetic, label: 'requires', verified: true });
+        linked.add(synthetic);
+      }
+    }
+  }
+
+  return { extraNodes, extraLinks };
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
 
 function fmt(value: number | null | undefined, decimals: number): string {
   if (value == null) return '—';
@@ -267,332 +229,467 @@ function formatBytes(bytes: number | null | undefined): string | null {
   return `${(bytes / 1_048_576).toFixed(0)} MB`;
 }
 
-const SOURCE_LABEL: Record<Resolved['source'], string> = {
-  database: 'Live from the model database',
-  embedded: 'Recorded in the image',
-  none: 'No provenance recorded',
-};
+function formatDate(date: Date): string {
+  return date.toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' });
+}
 
-function ProvenanceRow({ label, children }: { label: string; children: React.ReactNode }) {
+// ── Shared UI ─────────────────────────────────────────────────────────────────
+
+function Alert({ kind, title, message }: { kind: 'warning' | 'error'; title: string; message: string }) {
   return (
-    <div className="flex flex-col gap-0.5 sm:flex-row sm:gap-3">
-      <dt className="text-xs text-zinc-400 sm:w-32 sm:shrink-0">{label}</dt>
-      <dd className="text-sm text-zinc-700 break-words min-w-0">{children}</dd>
+    <div className={cn('flex items-center gap-3 rounded-[8px] px-4 py-3 border', kind === 'error' ? 'bg-[#FFF5F5] border-[#FECACA]' : 'bg-[#FFFBEB] border-[#FDE68A]')}>
+      <div className="shrink-0">
+        {kind === 'error' ? (
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
+            <circle cx="12" cy="12" r="9" stroke="#DC2626" strokeWidth="1.5" />
+            <path d="M12 8v5" stroke="#DC2626" strokeWidth="1.5" strokeLinecap="round" />
+            <circle cx="12" cy="16.5" r="0.75" fill="#DC2626" />
+          </svg>
+        ) : (
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
+            <path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" stroke="#D97706" strokeWidth="1.5" strokeLinejoin="round" />
+            <path d="M12 9v4" stroke="#D97706" strokeWidth="1.5" strokeLinecap="round" />
+            <circle cx="12" cy="17" r="0.75" fill="#D97706" />
+          </svg>
+        )}
+      </div>
+      <div>
+        <p className={cn('text-[13px] font-semibold', kind === 'error' ? 'text-[#DC2626]' : 'text-amber-800')}>{title}</p>
+        <p className={cn('text-[13px] mt-0.5', kind === 'error' ? 'text-[#DC2626]' : 'text-amber-800')}>{message}</p>
+      </div>
     </div>
   );
 }
+
+const UploadIcon = () => (
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+    <polyline points="17 8 12 3 7 8" />
+    <line x1="12" y1="3" x2="12" y2="15" />
+  </svg>
+);
+
+// ── Legend ────────────────────────────────────────────────────────────────────
+
+const LEGEND_ITEMS = [
+  { type: 'model', label: 'Models', color: '#a855f7', icon: 'M12 2.5 L20 7 V16 L12 20.5 L4 16 V7 Z M4 7 L12 11.5 L20 7 M12 11.5 V20.5' },
+  { type: 'dataset', label: 'Datasets', color: '#3b82f6', icon: 'M4 6 C4 4 8 3 12 3 C16 3 20 4 20 6 C20 8 16 9 12 9 C8 9 4 8 4 6 M4 6 V18 C4 20 8 21 12 21 C16 21 20 20 20 18 V6 M4 12 C4 14 8 15 12 15 C16 15 20 14 20 12' },
+  { type: 'paper', label: 'Papers', color: '#10b981', icon: 'M6 2.5 H13.5 L18 7 V21.5 H6 Z M13.5 2.5 V7 H18 M9 12 H15 M9 15.5 H15 M9 8.5 H11' },
+  { type: 'org', label: 'Organisations', color: '#f59e0b', icon: 'M4 21 V5.5 L11 3 V21 M11 9 H20 V21 M4 21 H21 M7 8.5 V8.6 M7 12 V12.1 M7 15.5 V15.6 M15 13 V13.1 M15 16.5 V16.6' },
+  { type: 'person', label: 'People', color: '#ec4899', icon: 'M12 11 A3.5 3.5 0 1 0 12 4 A3.5 3.5 0 0 0 12 11 Z M5 21 C5 16.5 8.5 14 12 14 C15.5 14 19 16.5 19 21' },
+];
+
+function GraphLegend() {
+  return (
+    <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+      {LEGEND_ITEMS.map((item) => (
+        <span key={item.type} className="flex items-center gap-1 text-[11px] text-[#939393]">
+          <svg width="12" height="12" viewBox="0 0 24 24" aria-hidden="true">
+            <path d={item.icon} fill="none" stroke={item.color} strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+          {item.label}
+        </span>
+      ))}
+      <span className="flex items-center gap-1 text-[11px] text-[#939393]">
+        <svg width="12" height="12" viewBox="0 0 24 24" aria-hidden="true">
+          <circle cx="12" cy="12" r="11" fill="none" stroke="#a1a1aa" strokeWidth="1.2" strokeDasharray="3,2" />
+          <path d="M12 2.5 L20 7 V16 L12 20.5 L4 16 V7 Z M4 7 L12 11.5 L20 7 M12 11.5 V20.5" fill="none" stroke="#a855f7" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+        Unverified — placeholder, not confirmed
+      </span>
+    </div>
+  );
+}
+
+// ── Layout toggle ─────────────────────────────────────────────────────────────
+
+const LAYOUT_OPTIONS: { id: LayoutMode; label: string }[] = [
+  { id: 'force', label: 'Scatter' },
+  { id: 'flow', label: 'Flow' },
+  { id: 'layers', label: 'Layers' },
+  { id: 'timeline', label: 'Timeline' },
+];
+
+// ── Requirement card ──────────────────────────────────────────────────────────
 
 function RequirementCard({ req }: { req: Resolved }) {
   const { data } = req;
   const size = formatBytes(data.size_bytes);
   const isExtension = req.category === 'custom_nodes';
 
+  const rows: { label: string; value: React.ReactNode }[] = [];
+  if (req.category) rows.push({ label: 'Category', value: req.category });
+  if (data.attribution) rows.push({ label: 'Attribution', value: data.attribution });
+  if (data.attribution_url) rows.push({
+    label: 'Source',
+    value: <a href={data.attribution_url} target="_blank" rel="noopener noreferrer" className="text-black underline underline-offset-2 hover:opacity-60 break-all">{data.attribution_url} <span className="inline-block">↗</span></a>,
+  });
+  if (data.license) rows.push({ label: 'License', value: data.license });
+  if (data.download_url) rows.push({
+    label: 'Download',
+    value: <a href={data.download_url} target="_blank" rel="noopener noreferrer" className="text-black underline underline-offset-2 hover:opacity-60 break-all">{data.download_url} <span className="inline-block">↗</span></a>,
+  });
+  if (size) rows.push({ label: 'Size', value: size });
+  if (data.data_provenance_notes) rows.push({ label: 'Training data', value: data.data_provenance_notes });
+
   return (
-    <div className="border border-zinc-200 rounded-sm overflow-hidden">
-      <div className="px-5 py-3 border-b border-zinc-100 bg-zinc-50">
-        <div className="flex items-start justify-between gap-3 flex-wrap">
-          <div className="min-w-0">
-            <p className="font-medium text-sm text-zinc-900 break-all">
-              {req.name ?? req.requirement}
-            </p>
-            {req.name && (
-              <p className="text-xs text-zinc-400 font-mono break-all">{req.requirement}</p>
-            )}
-          </div>
-          <div className="flex items-center gap-2 shrink-0">
-            <span className="text-xs text-zinc-500 border border-zinc-200 bg-white rounded-sm px-2 py-0.5">
-              {req.category}
-            </span>
-            {!isExtension && req.vetting_status && (
-              <VettingBadge status={req.vetting_status.toLowerCase() as VettingStatus} />
-            )}
-          </div>
+    <div className="border border-[#E9E9E9] rounded-[8px] px-5 py-4">
+      <div className="flex items-start justify-between gap-3 mb-3">
+        <div className="min-w-0">
+          <p className="text-[15px] font-semibold text-black break-all">{req.name ?? req.requirement}</p>
+          {req.name && <p className="text-[12px] text-[#939393] font-mono break-all mt-0.5">{req.requirement}</p>}
+        </div>
+        <div className="flex items-center gap-2 shrink-0">
+          {!isExtension && req.vetting_status && (
+            <VettingBadge status={req.vetting_status.toLowerCase() as VettingStatus} />
+          )}
         </div>
       </div>
-
-      <div className="px-5 py-4">
-        {req.source === 'none' ? (
-          <p className="text-sm text-zinc-400">
-            Nothing was recorded for this{' '}
-            {isExtension ? 'extension' : 'model'}
-            {req.pointerBroken
-              ? ", and the record it points to is no longer in the database."
-              : '.'}
-          </p>
-        ) : (
-          <dl className="space-y-2.5">
-            {data.attribution && (
-              <ProvenanceRow label="Attribution">{data.attribution}</ProvenanceRow>
-            )}
-            {data.attribution_url && (
-              <ProvenanceRow label="Source">
-                <a
-                  href={data.attribution_url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-zinc-900 underline underline-offset-2 hover:text-zinc-600"
-                >
-                  {data.attribution_url}
-                </a>
-              </ProvenanceRow>
-            )}
-            {data.license && <ProvenanceRow label="License">{data.license}</ProvenanceRow>}
-            {data.download_url && (
-              <ProvenanceRow label="Download">
-                <a
-                  href={data.download_url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-zinc-900 underline underline-offset-2 hover:text-zinc-600"
-                >
-                  {data.download_url}
-                </a>
-              </ProvenanceRow>
-            )}
-            {size && <ProvenanceRow label="Size">{size}</ProvenanceRow>}
-            {data.data_provenance_notes && (
-              <ProvenanceRow label="Training data">{data.data_provenance_notes}</ProvenanceRow>
-            )}
-          </dl>
-        )}
-
-        {/* Absent for most models — nothing to show rather than an empty state. */}
-        {req.lineage.length > 0 && (
-          <div className="mt-4 pt-3 border-t border-zinc-100">
-            <p className="text-xs font-semibold uppercase tracking-wide text-zinc-400 mb-2">
-              Lineage
-            </p>
-            <ul className="space-y-1.5">
-              {req.lineage.map((item) => (
-                <li key={item.id} className="text-sm">
-                  <span className="text-zinc-900">{item.related_name}</span>
-                  <span className="text-zinc-400"> ({item.related_type})</span>
-                  <span className="text-zinc-400"> — </span>
-                  <span className="text-zinc-600">{item.relationship_label}</span>
-                </li>
-              ))}
-            </ul>
-          </div>
-        )}
-
-        <p className="mt-3 pt-3 border-t border-zinc-100 text-xs text-zinc-400">
-          {SOURCE_LABEL[req.source]}
-          {req.pointerBroken && req.source === 'embedded' && (
-            <> — the database record it points to could not be found, so the image&apos;s own copy is shown.</>
-          )}
+      {req.source === 'none' ? (
+        <p className="text-[13px] text-[#939393]">
+          Nothing was recorded for this {isExtension ? 'extension' : 'model'}
+          {req.pointerBroken ? ', and the record it points to is no longer in the database.' : '.'}
         </p>
-      </div>
+      ) : (
+        <div className="space-y-4">
+          {rows.map(({ label, value }) => (
+            <div key={label} className="grid grid-cols-[110px_1fr]">
+              <span className="text-[12px] text-[#939393]">{label}</span>
+              <span className="text-[13px] text-black min-w-0">{value}</span>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
 
-function RawMetadata({ raw }: { raw: Record<string, unknown> }) {
-  return (
-    <details className="group border border-zinc-200 rounded-sm">
-      <summary className="px-4 py-2.5 text-xs font-medium text-zinc-500 cursor-pointer select-none list-none flex items-center justify-between hover:text-zinc-700">
-        Raw metadata
-        <span className="group-open:rotate-180 transition-transform">▾</span>
-      </summary>
-      <div className="border-t border-zinc-100 px-4 py-3 overflow-x-auto">
-        <pre className="text-xs text-zinc-600 whitespace-pre-wrap break-all">
-          {JSON.stringify(raw, null, 2)}
-        </pre>
-      </div>
-    </details>
-  );
-}
-
-// ── Main ────────────────────────────────────────────────────────────────────
+// ── Main component ────────────────────────────────────────────────────────────
 
 export default function ImageInfoViewer() {
+  const [tab, setTab] = useState<Tab>('environmental');
   const [isDragging, setIsDragging] = useState(false);
   const [fileName, setFileName] = useState('');
+  const [fileDate, setFileDate] = useState<Date | null>(null);
+  const [imageUrl, setImageUrl] = useState<string | null>(null);
   const [result, setResult] = useState<ParseResult | null>(null);
   const [resolved, setResolved] = useState<Resolved[]>([]);
   const [resolving, setResolving] = useState(false);
+
+  const [graphLayout, setGraphLayout] = useState<LayoutMode>('force');
+  const [showLayoutMenu, setShowLayoutMenu] = useState(false);
+  const [lineageOpen, setLineageOpen] = useState(true);
+  const [provenanceOpen, setProvenanceOpen] = useState(true);
+  const [extraNodes, setExtraNodes] = useState<LineageNode[]>([]);
+  const [extraLinks, setExtraLinks] = useState<LineageLink[]>([]);
+  const [expanded, setExpanded] = useState<Set<string>>(() => new Set(lineageNodes.map((n) => n.id)));
+
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const prevUrlRef = useRef<string | null>(null);
 
   const processFile = useCallback(async (file: File) => {
+    if (prevUrlRef.current) URL.revokeObjectURL(prevUrlRef.current);
+    const url = URL.createObjectURL(file);
+    prevUrlRef.current = url;
+    setImageUrl(url);
     setFileName(file.name);
+    setFileDate(new Date(file.lastModified));
     setResult(null);
     setResolved([]);
 
     const parsed = parsePng(await file.arrayBuffer());
     setResult(parsed);
 
-    if (parsed.kind === 'ok' && parsed.requirements.length > 0) {
-      setResolving(true);
-      try {
-        setResolved(await resolveRequirements(parsed.requirements));
-      } finally {
-        setResolving(false);
+    if (parsed.kind === 'ok') {
+      const { extraNodes: en, extraLinks: el } = buildGraphFromRequirements(file.name, parsed.requirements);
+      setExtraNodes(en);
+      setExtraLinks(el);
+      setExpanded(new Set([DROPPED_ROOT, ...lineageNodes.map((n) => n.id)]));
+
+      if (parsed.requirements.length > 0) {
+        setResolving(true);
+        try { setResolved(await resolveRequirements(parsed.requirements)); }
+        finally { setResolving(false); }
       }
     }
   }, []);
 
-  const handleDrop = useCallback(
-    (e: React.DragEvent) => {
-      e.preventDefault();
-      setIsDragging(false);
-      const file = e.dataTransfer.files[0];
-      if (file) processFile(file);
-    },
-    [processFile]
-  );
+  const handleDrop = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragging(false);
+    const file = e.dataTransfer.files[0];
+    if (file) processFile(file);
+  }, [processFile]);
 
-  const handleFileChange = useCallback(
-    (e: React.ChangeEvent<HTMLInputElement>) => {
-      const file = e.target.files?.[0];
-      if (file) processFile(file);
-    },
-    [processFile]
-  );
+  const handleFileChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) processFile(file);
+    e.target.value = '';
+  }, [processFile]);
+
+  const handleToggle = useCallback((id: string) => {
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      const allNodes = [...lineageNodes, ...extraNodes];
+      const allLinks = [...lineageLinks, ...extraLinks];
+      if (next.has(id)) {
+        next.delete(id);
+        const index = buildIndex(allNodes, allLinks);
+        const stillVisible = computeVisible(index, next, DROPPED_ROOT);
+        for (const n of [...next]) { if (!stillVisible.has(n)) next.delete(n); }
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
+  }, [extraNodes, extraLinks]);
+
+  const graphNodes = useMemo(() => [...lineageNodes, ...extraNodes], [extraNodes]);
+  const graphLinks = useMemo(() => [...lineageLinks, ...extraLinks], [extraLinks]);
+
+  const hasImage = imageUrl !== null;
+  const hasGraph = hasImage && result?.kind === 'ok' && extraNodes.length > 0;
 
   return (
-    <div className="space-y-6">
-      <div
-        onDragOver={(e) => {
-          e.preventDefault();
-          setIsDragging(true);
-        }}
-        onDragLeave={() => setIsDragging(false)}
-        onDrop={handleDrop}
-        onClick={() => fileInputRef.current?.click()}
-        className={cn(
-          'border-2 border-dashed rounded-sm p-12 text-center cursor-pointer transition-colors',
-          isDragging ? 'border-zinc-400 bg-zinc-50' : 'border-zinc-200 hover:border-zinc-300'
-        )}
-      >
-        <input
-          ref={fileInputRef}
-          type="file"
-          accept="image/png"
-          className="hidden"
-          onChange={handleFileChange}
-        />
-        {fileName ? (
-          <div>
-            <p className="font-medium text-zinc-900">{fileName}</p>
-            <p className="text-xs text-zinc-400 mt-1">Click to replace</p>
-          </div>
-        ) : (
-          <div>
-            <p className="text-zinc-500 mb-1">Drag and drop a rendered PNG image</p>
-            <p className="text-xs text-zinc-400">or click to browse</p>
-          </div>
-        )}
+    <div className="flex flex-col h-[calc(100dvh-3.5rem)]">
+      {/* Always-mounted file input */}
+      <input ref={fileInputRef} type="file" accept="image/png" className="hidden" onChange={handleFileChange} />
+
+      {/* Title — full-width header, matches PWW "Workflow Converter" */}
+      <div className="shrink-0 px-6 pt-8 pb-4">
+        <p className="text-[13px] font-semibold text-black">Image Inspector</p>
       </div>
 
-      {result && (
-        <>
-          {result.kind === 'not-png' && (
-            <div className="border border-amber-200 bg-amber-50 text-amber-800 text-sm px-4 py-3 rounded-sm">
-              This file doesn&apos;t look like a valid PNG. Make sure you&apos;re dropping a{' '}
-              <code className="font-mono">.png</code> file rendered by the Pseudorandom Rhino
-              plugin.
+      <div className="flex flex-1 min-h-0 overflow-hidden pt-4">
+
+        {/* Left sidebar */}
+        <aside className="w-[200px] shrink-0 px-6 pb-8 overflow-y-auto">
+          {!hasImage ? (
+            <p className="text-[13px] text-[#939393] leading-relaxed">Drop a PNG rendered by the Pseudorandom Rhino plugin to inspect its environmental data and model provenance.</p>
+          ) : (
+            <div className="space-y-3">
+              {([
+                { key: 'environmental', label: 'Environmental data' },
+                { key: 'provenance', label: 'Model provenance' },
+              ] as const).map(({ key, label }) => (
+                <button
+                  key={key}
+                  onClick={() => setTab(key)}
+                  className={cn(
+                    'w-full text-left text-[13px] transition-colors',
+                    tab === key ? 'text-black' : 'text-[#939393] hover:text-black'
+                  )}
+                >
+                  {label}
+                </button>
+              ))}
             </div>
           )}
+        </aside>
 
-          {result.kind === 'no-chunk' && (
-            <div className="border border-zinc-200 bg-zinc-50 text-zinc-600 text-sm px-4 py-3 rounded-sm">
-              No Pseudorandom metadata found in this image. Only PNGs rendered by the Pseudorandom
-              Rhino plugin carry embedded provenance.
-            </div>
-          )}
+        {/* Main content */}
+        <div className="flex-1 overflow-y-auto min-w-0">
+          <div className="px-10 pb-[40px] max-w-[800px]">
 
-          {result.kind === 'parse-error' && (
-            <div className="border border-red-200 bg-red-50 text-red-700 text-sm px-4 py-3 rounded-sm">
-              Failed to read the embedded metadata: {result.message}
-            </div>
-          )}
-
-          {result.kind === 'ok' && (
-            <div className="space-y-6">
-              {/* Environmental */}
-              <div className="border border-zinc-200 rounded-sm overflow-hidden">
-                <div className="px-5 py-4 border-b border-zinc-100 bg-zinc-50">
-                  <p className="text-xs font-semibold uppercase tracking-wide text-zinc-400">
-                    Environmental Impact
-                  </p>
+            {/* Drop zone */}
+            {!hasImage && (
+              <div
+                onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
+                onDragLeave={() => setIsDragging(false)}
+                onDrop={handleDrop}
+                onClick={() => fileInputRef.current?.click()}
+                className={cn(
+                  'border border-dashed rounded-[8px] cursor-pointer transition-colors flex flex-col items-center justify-center min-h-[280px] gap-3',
+                  isDragging ? 'border-[#B0B0B0] bg-zinc-50' : 'border-[#D4D4D4] hover:border-[#B0B0B0]'
+                )}
+              >
+                <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#D4D4D4" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                  <polyline points="17 8 12 3 7 8" />
+                  <line x1="12" y1="3" x2="12" y2="15" />
+                </svg>
+                <div className="text-center">
+                  <p className="text-[15px] text-black">Select an image to upload</p>
+                  <p className="text-[13px] text-[#939393] mt-1">or drag and drop it here</p>
+                  <p className="text-[13px] text-[#C0C0C0] mt-6">(Must be a Pseudorandom PNG)</p>
                 </div>
+              </div>
+            )}
+
+            {/* Parse errors */}
+            {result && result.kind !== 'ok' && (
+              <div className="space-y-3">
+                {result.kind === 'not-png' && (
+                  <Alert kind="error" title="Invalid file" message="This doesn't look like a valid PNG. Make sure you're uploading a .png file rendered by the Pseudorandom Rhino plugin." />
+                )}
+                {result.kind === 'no-chunk' && (
+                  <Alert kind="warning" title="No metadata found" message="No Pseudorandom metadata was found in this image. Only PNGs rendered by the Pseudorandom Rhino plugin carry embedded provenance." />
+                )}
+                {result.kind === 'parse-error' && (
+                  <Alert kind="error" title="Parse error" message={`Failed to read embedded metadata: ${result.message}`} />
+                )}
+              </div>
+            )}
+
+            {/* Environmental tab */}
+            {result?.kind === 'ok' && tab === 'environmental' && (
+              <div className="space-y-4">
                 {result.env ? (
-                  <dl className="divide-y divide-zinc-100">
-                    <div className="flex items-baseline justify-between px-5 py-3.5">
-                      <dt className="text-sm text-zinc-500">Energy usage</dt>
-                      <dd className="text-sm font-medium text-zinc-900 tabular-nums">
-                        {fmt(result.env.energy_kwh, 4)}
-                        {result.env.energy_kwh != null && ' kWh'}
-                      </dd>
+                  <div className="border border-[#E9E9E9] rounded-[8px] px-5 py-4">
+                    <div className="space-y-4">
+                      {[
+                        { label: 'Carbon', value: result.env.carbon_kgco2e != null ? `${fmt(result.env.carbon_kgco2e, 4)} kg CO₂e` : '—' },
+                        { label: 'Energy', value: result.env.energy_kwh != null ? `${fmt(result.env.energy_kwh, 4)} kWh` : '—' },
+                        { label: 'Water', value: result.env.water_l != null ? `${fmt(result.env.water_l, 3)} L` : '—' },
+                        { label: 'Worker location', value: result.env.worker_location ?? '—' },
+                      ].map(({ label, value }) => (
+                        <div key={label} className="grid grid-cols-[110px_1fr]">
+                          <span className="text-[13px] text-[#939393]">{label}</span>
+                          <span className="text-[13px] text-black tabular-nums">{value}</span>
+                        </div>
+                      ))}
                     </div>
-                    <div className="flex items-baseline justify-between px-5 py-3.5">
-                      <dt className="text-sm text-zinc-500">Carbon</dt>
-                      <dd className="text-sm font-medium text-zinc-900 tabular-nums">
-                        {fmt(result.env.carbon_kgco2e, 4)}
-                        {result.env.carbon_kgco2e != null && ' kg CO₂e'}
-                      </dd>
-                    </div>
-                    <div className="flex items-baseline justify-between px-5 py-3.5">
-                      <dt className="text-sm text-zinc-500">Water</dt>
-                      <dd className="text-sm font-medium text-zinc-900 tabular-nums">
-                        {fmt(result.env.water_l, 3)}
-                        {result.env.water_l != null && ' L'}
-                      </dd>
-                    </div>
-                    <div className="flex items-baseline justify-between px-5 py-3.5">
-                      <dt className="text-sm text-zinc-500">Worker location</dt>
-                      <dd className="text-sm font-medium text-zinc-900">
-                        {result.env.worker_location ?? '—'}
-                      </dd>
-                    </div>
-                  </dl>
+                  </div>
                 ) : (
-                  <p className="px-5 py-4 text-sm text-zinc-500">
-                    Environmental data wasn&apos;t recorded for this render. This happens when the
-                    plugin couldn&apos;t retrieve energy or carbon figures at the time.
-                  </p>
+                  <Alert kind="warning" title="No environmental data" message="Environmental data wasn't recorded for this render." />
                 )}
               </div>
+            )}
 
-              {/* Provenance */}
+            {/* Provenance tab */}
+            {result?.kind === 'ok' && tab === 'provenance' && (
               <div>
-                <div className="flex items-baseline justify-between mb-3">
-                  <p className="text-xs font-semibold uppercase tracking-wide text-zinc-400">
-                    Model Provenance
-                  </p>
-                  {resolving && <span className="text-xs text-zinc-400">Checking database…</span>}
-                </div>
+                {/* Lineage graph section */}
+                {hasGraph && (
+                  <div>
+                    <button
+                      onClick={() => setLineageOpen((v) => !v)}
+                      className="flex items-center gap-2 mb-3 text-left"
+                    >
+                      <span className="text-[24px] font-semibold text-black">Model lineage</span>
+                      <svg
+                        width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#939393"
+                        strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
+                        className={cn('transition-transform shrink-0', lineageOpen ? '' : '-rotate-90')}
+                      >
+                        <polyline points="6 9 12 15 18 9" />
+                      </svg>
+                    </button>
+                    {lineageOpen && (
+                      <>
+                        <div className="border border-[#E9E9E9] rounded-[8px] relative">
+                          {/* Floating view picker */}
+                          <div className="absolute top-3 right-3 z-10">
+                            <button
+                              onClick={() => setShowLayoutMenu((v) => !v)}
+                              className="flex items-center gap-1.5 bg-white border border-[#E9E9E9] rounded-[8px] px-3 py-1.5 text-[12px] hover:opacity-75 transition-opacity shadow-[0_0_4px_rgba(0,0,0,0.10)]"
+                            >
+                              <span className="text-[#939393]">View:</span>
+                              <span className="text-black">{LAYOUT_OPTIONS.find((o) => o.id === graphLayout)?.label}</span>
+                              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#939393" strokeWidth="2" strokeLinecap="round">
+                                <polyline points="6 9 12 15 18 9" />
+                              </svg>
+                            </button>
+                            {showLayoutMenu && (
+                              <>
+                                <div className="fixed inset-0 z-40" onClick={() => setShowLayoutMenu(false)} />
+                                <div className="absolute right-0 top-full mt-1 z-50 bg-white border border-[#E9E9E9] rounded-[8px] shadow-sm overflow-hidden min-w-[120px]">
+                                  {LAYOUT_OPTIONS.map((opt) => (
+                                    <button
+                                      key={opt.id}
+                                      onClick={() => { setGraphLayout(opt.id); setShowLayoutMenu(false); }}
+                                      className={cn('w-full text-left px-3 py-2 text-[12px] hover:bg-zinc-50 transition-colors', graphLayout === opt.id ? 'text-black font-medium' : 'text-[#939393]')}
+                                    >
+                                      {opt.label}
+                                    </button>
+                                  ))}
+                                </div>
+                              </>
+                            )}
+                          </div>
+                          <LineageGraph
+                            nodes={graphNodes}
+                            links={graphLinks}
+                            expanded={expanded}
+                            onToggle={handleToggle}
+                            rootId={DROPPED_ROOT}
+                            layout={graphLayout}
+                            imageUrl={imageUrl}
+                            className="h-[420px]"
+                          />
+                        </div>
+                        {/* Legend — outside the frame, 4px gap, 2px left padding */}
+                        <div className="mt-1 pl-0.5">
+                          <GraphLegend />
+                        </div>
+                      </>
+                    )}
+                  </div>
+                )}
 
+                {/* Requirement cards section */}
                 {result.requirements.length === 0 ? (
-                  <div className="border border-zinc-200 bg-zinc-50 text-zinc-600 text-sm px-4 py-3 rounded-sm">
-                    This image has Pseudorandom metadata, but no model requirements were recorded
-                    with it, so there&apos;s nothing to trace back.
+                  <div className={hasGraph ? 'mt-9' : ''}>
+                    <Alert kind="warning" title="No model provenance" message="This image has metadata but no model requirements were recorded with it." />
                   </div>
                 ) : (
-                  <div className="space-y-3">
-                    {(resolved.length > 0
-                      ? resolved
-                      : result.requirements.map(
-                          (r): Resolved => ({
-                            ...r,
-                            source: 'none',
-                            data: {},
-                            name: null,
-                            pointerBroken: false,
-                            lineage: [],
-                          })
-                        )
-                    ).map((req, i) => (
-                      <RequirementCard key={`${req.requirement}-${i}`} req={req} />
-                    ))}
+                  <div className={hasGraph ? 'mt-9' : ''}>
+                    <button
+                      onClick={() => setProvenanceOpen((v) => !v)}
+                      className="flex items-center gap-2 mb-3 text-left"
+                    >
+                      <span className="text-[24px] font-semibold text-black">Model provenance</span>
+                      <svg
+                        width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#939393"
+                        strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
+                        className={cn('transition-transform shrink-0', provenanceOpen ? '' : '-rotate-90')}
+                      >
+                        <polyline points="6 9 12 15 18 9" />
+                      </svg>
+                    </button>
+                    {provenanceOpen && (
+                      <div className="space-y-4">
+                        {resolving && <p className="text-[13px] text-[#939393]">Checking database…</p>}
+                        {(resolved.length > 0
+                          ? resolved
+                          : result.requirements.map((r): Resolved => ({ ...r, source: 'none', data: {}, name: null, pointerBroken: false, lineage: [] }))
+                        ).map((req, i) => (
+                          <RequirementCard key={`${req.requirement}-${i}`} req={req} />
+                        ))}
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
+            )}
 
-              <RawMetadata raw={result.raw} />
+          </div>
+        </div>
+
+        {/* Right panel — only after a file is loaded */}
+        {hasImage && (
+          <div className="w-[280px] shrink-0 self-start border border-[#E9E9E9] rounded-[8px] p-5 flex flex-col mr-6">
+            <div className="rounded-[8px] overflow-hidden border border-[#E9E9E9]">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src={imageUrl!} alt={fileName} className="w-full aspect-square object-cover" />
             </div>
-          )}
-        </>
-      )}
+            <div className="mt-2">
+              <p className="text-[13px] font-medium text-black truncate">{fileName}</p>
+              {fileDate && (
+                <p className="text-[12px] text-[#939393] mt-0.5">{formatDate(fileDate)}</p>
+              )}
+            </div>
+            <button
+              onClick={() => fileInputRef.current?.click()}
+              className="mt-4 flex items-center justify-center gap-2 w-full border border-[#E9E9E9] rounded-[8px] px-3 py-2 text-[13px] text-black hover:border-[#B0B0B0] transition-colors"
+            >
+              <UploadIcon />
+              Upload another image
+            </button>
+          </div>
+        )}
+
+      </div>
     </div>
   );
 }

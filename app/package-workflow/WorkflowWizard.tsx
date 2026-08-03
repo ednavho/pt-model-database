@@ -1,5 +1,7 @@
 'use client';
 
+import React from 'react';
+import { InfoTooltip } from '@/components/ui/InfoTooltip';
 import {
   COMFY_MODEL_FOLDERS,
   MODEL_FILE_EXTENSIONS,
@@ -566,7 +568,7 @@ function CapabilityGroup({
 const STEPS: { key: WizardStep; label: string }[] = [
   { key: 'upload', label: 'Upload' },
   { key: 'requirements', label: 'Database Models' },
-  { key: 'possible-models', label: 'Other Models' },
+  { key: 'possible-models', label: 'Possible models' },
   { key: 'variables', label: 'Variables' },
   { key: 'metadata', label: 'Metadata' },
   { key: 'preview', label: 'Preview' },
@@ -628,9 +630,9 @@ function CodePreview({ code }: { code: string }) {
 }
 
 const CARD_INPUT = 'w-full border border-[#E9E9E9] rounded-[8px] px-3 py-2 text-[13px] outline-none focus:border-[#B0B0B0] bg-white';
-const CARD_LABEL = 'block text-[12px] text-[#939393] mb-1';
+const CARD_LABEL = 'flex items-center gap-1.5 text-[12px] text-[#939393] mb-1';
 const META_INPUT = 'w-full border-b border-[#E9E9E9] py-1.5 text-[13px] outline-none focus:border-b-black bg-transparent';
-const META_LABEL = 'block text-[12px] text-[#939393] mb-1';
+const META_LABEL = 'flex items-center gap-1.5 text-[12px] text-[#939393] mb-1';
 
 const LOADER_CAT_LABELS: Record<string, string> = {
   checkpoints: 'Checkpoint',
@@ -1225,7 +1227,7 @@ export default function WorkflowWizard() {
                 </div>
                 <span className={cn(
                   'text-[13px]',
-                  i === currentIdx ? 'text-black font-medium' : completed ? 'text-black' : 'text-[#939393]'
+                  i === currentIdx ? 'text-black' : completed ? 'text-black' : 'text-[#939393]'
                 )}>
                   {s.label}
                 </span>
@@ -1358,8 +1360,8 @@ export default function WorkflowWizard() {
             {unseenLoaders.map((ul) => {
               const addedForLoader = possibleModels.filter((p) => p.forLoaderNodeId === ul.nodeId);
               return (
-                <>
-                  <div key={ul.nodeId} className="border border-[#FDE68A] bg-[#FFFBEB] rounded-[8px] p-5">
+                <React.Fragment key={ul.nodeId}>
+                  <div className="border border-[#FDE68A] bg-[#FFFBEB] rounded-[8px] p-5">
                     <div className="flex items-start gap-3">
                       <div className="shrink-0">
                         <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
@@ -1413,29 +1415,29 @@ export default function WorkflowWizard() {
                           {p.selected && (
                             <div className="space-y-4">
                               <div>
-                                <label className={CARD_LABEL}>File Name:</label>
+                                <label className={CARD_LABEL}>File name <InfoTooltip text="The model filename as referenced in the workflow graph" /></label>
                                 <input className={CARD_INPUT} value={p.fileName} onChange={(e) => updatePossible(p.key, 'fileName', e.target.value)} placeholder="filename.safetensors" />
                               </div>
                               <div>
-                                <label className={CARD_LABEL}>Category:</label>
+                                <label className={CARD_LABEL}>Category <InfoTooltip text="The ComfyUI subfolder where this model is stored" /></label>
                                 <SelectInput className={cn(CARD_INPUT, 'cursor-pointer')} value={p.category} onChange={(e) => updatePossible(p.key, 'category', e.target.value)}>
                                   {COMFY_MODEL_FOLDERS.map((f) => <option key={f} value={f}>{LOADER_CAT_LABELS[f] ?? f}</option>)}
                                 </SelectInput>
                               </div>
                               <div className="grid grid-cols-2 gap-4">
-                                <div><label className={CARD_LABEL}>Download URL:</label><input className={CARD_INPUT} value={p.provenance.download_url} onChange={(e) => updatePossibleProvenance(p.key, 'download_url', e.target.value)} placeholder="https://huggingface.co/..." /></div>
-                                <div><label className={CARD_LABEL}>License:</label><input className={CARD_INPUT} value={p.provenance.license} onChange={(e) => updatePossibleProvenance(p.key, 'license', e.target.value)} placeholder="e.g. Apache 2.0" /></div>
-                                <div><label className={CARD_LABEL}>Attribution:</label><input className={CARD_INPUT} value={p.provenance.attribution} onChange={(e) => updatePossibleProvenance(p.key, 'attribution', e.target.value)} placeholder="Creator or organization" /></div>
-                                <div><label className={CARD_LABEL}>Attribution URL:</label><input className={CARD_INPUT} value={p.provenance.attribution_url} onChange={(e) => updatePossibleProvenance(p.key, 'attribution_url', e.target.value)} placeholder="https://..." /></div>
+                                <div><label className={CARD_LABEL}>Download URL <InfoTooltip text="Where to download this model" /></label><input className={CARD_INPUT} value={p.provenance.download_url} onChange={(e) => updatePossibleProvenance(p.key, 'download_url', e.target.value)} placeholder="https://huggingface.co/..." /></div>
+                                <div><label className={CARD_LABEL}>License <InfoTooltip text="License governing use of this model" /></label><input className={CARD_INPUT} value={p.provenance.license} onChange={(e) => updatePossibleProvenance(p.key, 'license', e.target.value)} placeholder="e.g. Apache 2.0" /></div>
+                                <div><label className={CARD_LABEL}>Attribution <InfoTooltip text="Credit the creator or source of this model" /></label><input className={CARD_INPUT} value={p.provenance.attribution} onChange={(e) => updatePossibleProvenance(p.key, 'attribution', e.target.value)} placeholder="Creator or organization" /></div>
+                                <div><label className={CARD_LABEL}>Attribution URL <InfoTooltip text="Link to the creator's page or original source" /></label><input className={CARD_INPUT} value={p.provenance.attribution_url} onChange={(e) => updatePossibleProvenance(p.key, 'attribution_url', e.target.value)} placeholder="https://..." /></div>
                               </div>
-                              <div><label className={CARD_LABEL}>Data Provenance Notes:</label><input className={CARD_INPUT} value={p.provenance.data_provenance_notes} onChange={(e) => updatePossibleProvenance(p.key, 'data_provenance_notes', e.target.value)} placeholder="Creator or organization" /></div>
+                              <div><label className={CARD_LABEL}>Data provenance notes <InfoTooltip text="Additional context about training data or model origins" /></label><input className={CARD_INPUT} value={p.provenance.data_provenance_notes} onChange={(e) => updatePossibleProvenance(p.key, 'data_provenance_notes', e.target.value)} placeholder="Creator or organization" /></div>
                             </div>
                           )}
                         </div>
                       </div>
                     </div>
                   ))}
-                </>
+                </React.Fragment>
               );
             })}
 
@@ -1465,18 +1467,18 @@ export default function WorkflowWizard() {
                           <p className="text-[12px] text-[#939393] font-mono mt-0.5">{p.fileName}</p>
                         </div>
                         <div>
-                          <label className={CARD_LABEL}>Category:</label>
+                          <label className={CARD_LABEL}>Category <InfoTooltip text="The ComfyUI subfolder where this model is stored" /></label>
                           <SelectInput className={cn(CARD_INPUT, 'cursor-pointer')} value={p.category} onChange={(e) => updatePossible(p.key, 'category', e.target.value)}>
                             {COMFY_MODEL_FOLDERS.map((f) => <option key={f} value={f}>{LOADER_CAT_LABELS[f] ?? f}</option>)}
                           </SelectInput>
                         </div>
                         <div className="grid grid-cols-2 gap-4">
-                          <div><label className={CARD_LABEL}>Download URL:</label><input className={CARD_INPUT} value={p.provenance.download_url} onChange={(e) => updatePossibleProvenance(p.key, 'download_url', e.target.value)} placeholder="https://huggingface.co/..." /></div>
-                          <div><label className={CARD_LABEL}>License:</label><input className={CARD_INPUT} value={p.provenance.license} onChange={(e) => updatePossibleProvenance(p.key, 'license', e.target.value)} placeholder="e.g. Apache 2.0" /></div>
-                          <div><label className={CARD_LABEL}>Attribution:</label><input className={CARD_INPUT} value={p.provenance.attribution} onChange={(e) => updatePossibleProvenance(p.key, 'attribution', e.target.value)} placeholder="Creator or organization" /></div>
-                          <div><label className={CARD_LABEL}>Attribution URL:</label><input className={CARD_INPUT} value={p.provenance.attribution_url} onChange={(e) => updatePossibleProvenance(p.key, 'attribution_url', e.target.value)} placeholder="https://..." /></div>
+                          <div><label className={CARD_LABEL}>Download URL <InfoTooltip text="Where to download this model" /></label><input className={CARD_INPUT} value={p.provenance.download_url} onChange={(e) => updatePossibleProvenance(p.key, 'download_url', e.target.value)} placeholder="https://huggingface.co/..." /></div>
+                          <div><label className={CARD_LABEL}>License <InfoTooltip text="License governing use of this model" /></label><input className={CARD_INPUT} value={p.provenance.license} onChange={(e) => updatePossibleProvenance(p.key, 'license', e.target.value)} placeholder="e.g. Apache 2.0" /></div>
+                          <div><label className={CARD_LABEL}>Attribution <InfoTooltip text="Credit the creator or source of this model" /></label><input className={CARD_INPUT} value={p.provenance.attribution} onChange={(e) => updatePossibleProvenance(p.key, 'attribution', e.target.value)} placeholder="Creator or organization" /></div>
+                          <div><label className={CARD_LABEL}>Attribution URL <InfoTooltip text="Link to the creator's page or original source" /></label><input className={CARD_INPUT} value={p.provenance.attribution_url} onChange={(e) => updatePossibleProvenance(p.key, 'attribution_url', e.target.value)} placeholder="https://..." /></div>
                         </div>
-                        <div><label className={CARD_LABEL}>Data Provenance Notes:</label><input className={CARD_INPUT} value={p.provenance.data_provenance_notes} onChange={(e) => updatePossibleProvenance(p.key, 'data_provenance_notes', e.target.value)} placeholder="Creator or organization" /></div>
+                        <div><label className={CARD_LABEL}>Data provenance notes <InfoTooltip text="Additional context about training data or model origins" /></label><input className={CARD_INPUT} value={p.provenance.data_provenance_notes} onChange={(e) => updatePossibleProvenance(p.key, 'data_provenance_notes', e.target.value)} placeholder="Creator or organization" /></div>
                       </div>
                     )}
                   </div>
@@ -1509,21 +1511,21 @@ export default function WorkflowWizard() {
                 </div>
 
                 <div className="mb-4">
-                  <label className={CARD_LABEL}>Variable Name:</label>
+                  <label className={CARD_LABEL}>Variable name <InfoTooltip text="Human-readable label shown when running this workflow" /></label>
                   <input className={CARD_INPUT} value={v.name} onChange={(e) => updateVar(idx, 'name', e.target.value)} placeholder="e.g. Adherence" />
                 </div>
 
                 {(v.type === 'int' || v.type === 'float') && (
                   <div className="grid grid-cols-2 gap-4 mb-4">
-                    <div><label className={CARD_LABEL}>Default:</label><input className={CARD_INPUT} value={v.default} onChange={(e) => updateVar(idx, 'default', e.target.value)} /></div>
-                    <div><label className={CARD_LABEL}>Min:</label><input className={CARD_INPUT} value={v.min} onChange={(e) => updateVar(idx, 'min', e.target.value)} /></div>
-                    <div><label className={CARD_LABEL}>Max:</label><input className={CARD_INPUT} value={v.max} onChange={(e) => updateVar(idx, 'max', e.target.value)} /></div>
-                    <div><label className={CARD_LABEL}>Step:</label><input className={CARD_INPUT} value={v.step} onChange={(e) => updateVar(idx, 'step', e.target.value)} /></div>
+                    <div><label className={CARD_LABEL}>Default <InfoTooltip text="Starting value when the workflow is loaded" /></label><input className={CARD_INPUT} value={v.default} onChange={(e) => updateVar(idx, 'default', e.target.value)} /></div>
+                    <div><label className={CARD_LABEL}>Min <InfoTooltip text="Minimum allowed value" /></label><input className={CARD_INPUT} value={v.min} onChange={(e) => updateVar(idx, 'min', e.target.value)} /></div>
+                    <div><label className={CARD_LABEL}>Max <InfoTooltip text="Maximum allowed value" /></label><input className={CARD_INPUT} value={v.max} onChange={(e) => updateVar(idx, 'max', e.target.value)} /></div>
+                    <div><label className={CARD_LABEL}>Step <InfoTooltip text="Increment between selectable values" /></label><input className={CARD_INPUT} value={v.step} onChange={(e) => updateVar(idx, 'step', e.target.value)} /></div>
                   </div>
                 )}
 
                 <div>
-                  <label className={CARD_LABEL}>Description:</label>
+                  <label className={CARD_LABEL}>Description <InfoTooltip text="Explanation of what this variable controls, shown in the Rhino Plugin" /></label>
                   <input className={CARD_INPUT} value={v.description} onChange={(e) => updateVar(idx, 'description', e.target.value)} placeholder="Shown in Rhino Plugin" />
                 </div>
               </div>
@@ -1559,15 +1561,15 @@ export default function WorkflowWizard() {
               <p className="text-[13px] font-semibold text-black mb-4">Workflow Details</p>
               <div className="space-y-4">
                 <div>
-                  <label className={CARD_LABEL}>Workflow Name</label>
+                  <label className={CARD_LABEL}>Workflow name <InfoTooltip text="Name shown in the Rhino Plugin workflow browser" /></label>
                   <input className={CARD_INPUT} value={workflowName} onChange={(e) => setWorkflowName(e.target.value)} placeholder="e.g. Juggernaut" />
                 </div>
                 <div>
-                  <label className={CARD_LABEL}>Description</label>
+                  <label className={CARD_LABEL}>Description <InfoTooltip text="Explanation of what this variable controls, shown in the Rhino Plugin" /></label>
                   <input className={CARD_INPUT} value={description} onChange={(e) => setDescription(e.target.value)} placeholder="Shown in Rhino Plugin" />
                 </div>
                 <div>
-                  <label className={CARD_LABEL}>Thumbnail</label>
+                  <label className={CARD_LABEL}>Thumbnail <InfoTooltip text="Preview image shown in the workflow gallery" /></label>
                   <input ref={thumbInputRef} type="file" accept="image/*" className="hidden" onChange={handleThumbChange} />
                   <div className="flex items-center gap-3">
                     {thumbnailDataUri && (
@@ -1587,15 +1589,15 @@ export default function WorkflowWizard() {
               <p className="text-[13px] font-semibold text-black mb-4">Attribution Details</p>
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className={CARD_LABEL}>Author</label>
+                  <label className={CARD_LABEL}>Author <InfoTooltip text="Creator of this workflow" /></label>
                   <input className={CARD_INPUT} value={attribution.author} onChange={(e) => setAttribution((a) => ({ ...a, author: e.target.value }))} placeholder="e.g John Doe" />
                 </div>
                 <div>
-                  <label className={CARD_LABEL}>Author URL</label>
+                  <label className={CARD_LABEL}>Author URL <InfoTooltip text="Link to the author's profile or website" /></label>
                   <input className={CARD_INPUT} type="url" value={attribution.author_url} onChange={(e) => setAttribution((a) => ({ ...a, author_url: e.target.value }))} placeholder="https://..." />
                 </div>
                 <div className="col-span-2">
-                  <label className={CARD_LABEL}>License</label>
+                  <label className={CARD_LABEL}>License <InfoTooltip text="License governing use of this model" /></label>
                   <input className={CARD_INPUT} value={attribution.license} onChange={(e) => setAttribution((a) => ({ ...a, license: e.target.value }))} placeholder="e.g Apache 2.0" />
                 </div>
               </div>
@@ -1710,7 +1712,7 @@ export default function WorkflowWizard() {
         {rawGraph !== null && step !== 'preview' && (
           panelMinimized ? (
             <div
-              className="shrink-0 border-l border-t border-[#E9E9E9] rounded-tl-[8px] flex items-center justify-center cursor-pointer hover:bg-zinc-50 transition-colors"
+              className="shrink-0 border-l border-t border-b border-[#E9E9E9] rounded-l-[8px] flex items-center justify-center cursor-pointer hover:bg-zinc-50 transition-colors mb-6"
               style={{ width: 32 }}
               onClick={() => setPanelMinimized(false)}
             >
@@ -1723,8 +1725,7 @@ export default function WorkflowWizard() {
             </div>
           ) : (
             <div
-              style={{ width: rightPanelWidth }}
-              className="shrink-0 border-l border-t border-[#E9E9E9] rounded-tl-[8px] flex flex-col overflow-hidden relative"
+              className="flex-1 min-w-[280px] border border-[#E9E9E9] rounded-[8px] flex flex-col overflow-hidden relative mr-6 mb-6"
             >
               {/* Drag handle on the left edge */}
               <div

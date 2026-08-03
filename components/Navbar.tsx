@@ -68,15 +68,7 @@ export default function Navbar() {
             Image Info
           </Link>
 
-          {/* Standalone prototype — not the database-backed lineage feature. */}
-          <Link
-            href="/lineage-sketch"
-            className="text-sm text-zinc-400 hover:text-zinc-900"
-          >
-            Lineage sketch
-          </Link>
-
-          {user && internal && (
+{user && internal && (
             <div className="flex items-center gap-3">
               <span className="text-xs text-zinc-400">
                 {user.email}
