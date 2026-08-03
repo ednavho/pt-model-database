@@ -13,11 +13,11 @@ export type LayoutMode = 'force' | 'flow' | 'layers' | 'timeline';
 
 export const TYPE_COLORS: Record<string, string> = {
   root: '#18181b',
-  model: '#a855f7',
-  dataset: '#3b82f6',
-  paper: '#10b981',
-  org: '#f59e0b',
-  person: '#ec4899',
+  model: '#9970C2',
+  dataset: '#6990BF',
+  paper: '#50A589',
+  org: '#C09A59',
+  person: '#BD7599',
 };
 
 // Feather-ish glyphs in a 24×24 box, drawn as white strokes inside each node
@@ -253,6 +253,7 @@ export default function LineageGraph({
 
   const posRef = useRef(new Map<string, { x: number; y: number }>());
   const zoomRef = useRef<d3.ZoomTransform>(d3.zoomIdentity);
+  const hasFittedRef = useRef(false);
   const selectedRef = useRef<string | null>(null);
   const onToggleRef = useRef(onToggle);
   onToggleRef.current = onToggle;
@@ -297,6 +298,11 @@ export default function LineageGraph({
       let yearStripLayer: d3.Selection<SVGGElement, unknown, null, undefined> | null = null;
 
       const zoomBounds = () => {
+        // Before the initial fit: keep nodes within the original frame so the
+        // fit has a clean, stable bounding box to work from.
+        // After the fit: allow nodes to flow into the zoom-visible area so
+        // panning/zooming reveals more of the graph.
+        if (!hasFittedRef.current) return { w: width, h: height, minX: 0, minY: 0 };
         const t = zoomRef.current;
         return { w: width / t.k, h: height / t.k, minX: -t.x / t.k, minY: -t.y / t.k };
       };
@@ -416,6 +422,7 @@ export default function LineageGraph({
       // defined before zoom is set up.
       let simRef: d3.Simulation<SimNode, SimLink> | null = null;
 
+      let isFitting = false;
       const zoom = d3
         .zoom<SVGSVGElement, unknown>()
         .scaleExtent([0.2, 4])
@@ -423,7 +430,7 @@ export default function LineageGraph({
           zoomRef.current = e.transform;
           root.attr('transform', e.transform.toString());
           // Always kick the sim so nodes re-settle into any newly revealed space.
-          if (simRef) simRef.alpha(Math.max(simRef.alpha(), 0.15)).restart();
+          if (simRef && !isFitting) simRef.alpha(Math.max(simRef.alpha(), 0.15)).restart();
           // Reposition year strip labels to stay fixed at top of frame.
           if (yearStripLayer) {
             yearStripLayer.selectAll<SVGTextElement, number>('text')
@@ -553,6 +560,7 @@ export default function LineageGraph({
         .attr('height', imageRootH)
         .attr('rx', 3)
         .attr('fill', 'none')
+        .attr('pointer-events', 'all')
         .attr('stroke', TYPE_COLORS.root)
         .attr('stroke-width', 2);
 
@@ -616,13 +624,13 @@ export default function LineageGraph({
         .attr('stroke-width', 3)
         .attr('pointer-events', 'none');
 
-      // ── Popup (foreignObject rides along with pan/zoom & ticks) ───────────
+      // ── Popup (lives on SVG directly so it's in viewport space, not zoom space) ──
       const CARD_W = 224;
       const CARD_H = 220;
-      const popup = root
+      const popup = svg
         .append('foreignObject')
         .attr('width', CARD_W + 16)
-        .attr('height', CARD_H)
+        .attr('height', CARD_H * 2)
         .style('overflow', 'visible')
         .style('pointer-events', 'none')
         .style('display', 'none');
@@ -657,13 +665,30 @@ export default function LineageGraph({
         );
         popup.style('display', null);
 
-        // Sit under the node, nudged to whichever side keeps it in frame; flip
-        // above when there's no room below.
-        const nx = n.x ?? 0;
-        const ny = n.y ?? 0;
-        const x = Math.max(4, Math.min(width - CARD_W - 4, nx - CARD_W / 2));
-        const below = ny + radius(n) + 10;
-        const y = below + CARD_H > height ? ny - radius(n) - 10 - CARD_H : below;
+        // Measure actual rendered card height (popup must be visible first)
+        const cardEl = popupBody.node() as HTMLElement | null;
+        const actualH = cardEl ? (cardEl.offsetHeight || CARD_H) : CARD_H;
+
+        // Convert node position (simulation space) → screen space via zoom transform
+        const t = zoomRef.current;
+        const sX = t.x + (n.x ?? 0) * t.k;  // node center x in screen px
+        const sY = t.y + (n.y ?? 0) * t.k;  // node center y in screen px
+        const sR = radius(n) * t.k;           // node radius in screen px
+        const GAP = 10;
+
+        // Horizontal: center card on node, shift left if it would overflow right edge
+        const defaultX = sX - CARD_W / 2;
+        const nearRight = defaultX + CARD_W > width - 4;
+        let x: number, y: number;
+        if (nearRight) {
+          // Place to the left of the node
+          x = Math.max(4, sX - sR - GAP - CARD_W);
+          y = Math.max(4, Math.min(height - actualH - 4, sY - actualH / 2));
+        } else {
+          x = Math.max(4, Math.min(width - CARD_W - 4, defaultX));
+          const below = sY + sR + GAP;
+          y = below + actualH > height - 4 ? Math.max(4, sY - sR - GAP - actualH) : below;
+        }
         popup.attr('x', x).attr('y', y);
       }
 
@@ -804,6 +829,40 @@ export default function LineageGraph({
         rootNode.fy = height / 2;
       }
 
+      // Give the simulation a synchronous head-start so nodes have meaningful
+      // spread positions even if the RAF-based loop is cancelled before its
+      // first tick fires (e.g. React StrictMode double-mount cleanup).
+      for (let i = 0; i < 30; i++) sim.tick();
+
+      // Fit all nodes into view when the simulation first settles.
+      // hasFittedRef persists across redraws caused by ResizeObserver so the
+      // fit fires exactly once per data/layout change (hasFittedRef is reset in
+      // the useEffect below when the draw callback reference changes).
+      function fitToView() {
+        let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+        for (const n of nodes) {
+          const r = radius(n) + 4;
+          minX = Math.min(minX, (n.x ?? 0) - r);
+          maxX = Math.max(maxX, (n.x ?? 0) + r);
+          minY = Math.min(minY, (n.y ?? 0) - r);
+          maxY = Math.max(maxY, (n.y ?? 0) + r);
+        }
+        if (!isFinite(minX)) return;
+        const pad = 24;
+        const gW = maxX - minX + pad * 2;
+        const gH = maxY - minY + pad * 2;
+        const k = Math.min(width / gW, height / gH, 1);
+        const tx = (width - (maxX + minX) * k) / 2;
+        const ty = (height - (maxY + minY) * k) / 2;
+        const t = d3.zoomIdentity.translate(tx, ty).scale(k);
+        // Instant transform — no animation so ResizeObserver redraws can't
+        // interrupt it, and the zoom handler fires synchronously.
+        isFitting = true;
+        svg.call(zoom.transform, t);
+        isFitting = false;
+        zoomRef.current = t;
+      }
+
       sim.on('tick', () => {
         link
           .attr('x1', (d) => (d.source as SimNode).x!)
@@ -836,6 +895,17 @@ export default function LineageGraph({
         updatePopup();
       });
 
+      function doFit() {
+        if (!hasFittedRef.current) {
+          hasFittedRef.current = true;
+          fitToView();
+        }
+      }
+      sim.on('end', doFit);
+      // Fallback: if the sim never fires 'end' (kept alive by user interaction),
+      // fit after enough ticks to settle (~alphaDecay 0.03 × 215 ticks ≈ 4s).
+      const fitTimer = setTimeout(doFit, 4000);
+
       updatePopup();
 
       node.call(
@@ -860,12 +930,18 @@ export default function LineageGraph({
           })
       );
 
-      return () => sim.stop();
+      return () => { sim.stop(); clearTimeout(fitTimer); };
     },
     [index, allLinks, expanded, rootId, layout, imageUrl, imageDimensions, showLinkLabels, linkPhrase]
   );
 
   useEffect(() => {
+    // Reset fit and zoom whenever data/layout changes so each new graph starts
+    // from a clean slate (prevents stale zoom accumulating across HMR reloads
+    // or layout switches).
+    hasFittedRef.current = false;
+    zoomRef.current = d3.zoomIdentity;
+
     const host = hostRef.current;
     if (!host) return;
     let stop: (() => void) | undefined;
