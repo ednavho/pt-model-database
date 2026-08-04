@@ -140,6 +140,8 @@ function iconScale(radius: number): number {
 /**
  * Soft-spring border: applies gentle velocity nudges when a node gets near the
  * edge, with a hard stop only far outside the frame to prevent total escape.
+ * Deliberately loose — this is a "try to stay roughly in view" nudge, not a
+ * wall, so it never fights the other forces hard enough to cause visible jitter.
  */
 function boundsForce(
   getBounds: () => { w: number; h: number; minX?: number; minY?: number },
@@ -150,7 +152,7 @@ function boundsForce(
     const { w, h, minX = 0, minY = 0 } = getBounds();
     for (const n of nodes) {
       const r = radiusFn(n) + 4;
-      const soft = 35;
+      const soft = 70;
       if (n.fx == null) {
         const gaps = [
           (n.x! - minX) - r,
@@ -158,12 +160,13 @@ function boundsForce(
           (n.y! - minY) - r,
           (minY + h) - r - n.y!,
         ];
-        if (gaps[0] < soft) n.vx = (n.vx ?? 0) + (soft - gaps[0]) * 0.012;
-        if (gaps[1] < soft) n.vx = (n.vx ?? 0) - (soft - gaps[1]) * 0.012;
-        if (gaps[2] < soft) n.vy = (n.vy ?? 0) + (soft - gaps[2]) * 0.012;
-        if (gaps[3] < soft) n.vy = (n.vy ?? 0) - (soft - gaps[3]) * 0.012;
-        n.x = Math.max(minX - r * 0.5, Math.min(minX + w + r * 0.5, n.x!));
-        n.y = Math.max(minY - r * 0.5, Math.min(minY + h + r * 0.5, n.y!));
+        if (gaps[0] < soft) n.vx = (n.vx ?? 0) + (soft - gaps[0]) * 0.004;
+        if (gaps[1] < soft) n.vx = (n.vx ?? 0) - (soft - gaps[1]) * 0.004;
+        if (gaps[2] < soft) n.vy = (n.vy ?? 0) + (soft - gaps[2]) * 0.004;
+        if (gaps[3] < soft) n.vy = (n.vy ?? 0) - (soft - gaps[3]) * 0.004;
+        // Hard stop only far outside the frame — a safety net, not a boundary.
+        n.x = Math.max(minX - r * 3, Math.min(minX + w + r * 3, n.x!));
+        n.y = Math.max(minY - r * 3, Math.min(minY + h + r * 3, n.y!));
       } else {
         n.fx = Math.max(minX + r, Math.min(minX + w - r, n.fx ?? 0));
         n.fy = Math.max(minY + r, Math.min(minY + h - r, n.fy ?? 0));
@@ -178,7 +181,6 @@ function boundsForce(
 
 function popupHtml(node: LineageNode): string {
   const color = TYPE_COLORS[node.type];
-  const kind = node.type === 'root' ? 'render' : node.type;
   const desc =
     node.type === 'root'
       ? 'The image this whole graph is rooted in.'
@@ -186,7 +188,7 @@ function popupHtml(node: LineageNode): string {
 
   const badge =
     node.verified === false
-      ? '<span style="margin-left:6px;font-size:10px;color:#b45309;border:1px dashed #f59e0b;border-radius:3px;padding:0 4px">unverified</span>'
+      ? '<span style="margin-left:6px;font-size:10px;font-weight:400;color:#b45309;border:1px dashed #f59e0b;border-radius:3px;padding:0 4px">unverified</span>'
       : '';
 
   const allLinks = [
@@ -196,31 +198,30 @@ function popupHtml(node: LineageNode): string {
 
   const linksHtml =
     allLinks.length > 0
-      ? `<div style="margin-top:7px;display:flex;flex-wrap:wrap;gap:5px 8px">
+      ? `<div style="margin-top:10px;padding-top:8px;border-top:1px solid #e4e4e7;display:flex;flex-wrap:wrap;gap:5px 10px">
           ${allLinks
             .map(
               (l) =>
-                `<a href="${l.url}" target="_blank" rel="noopener noreferrer" style="color:#3f3f46;text-decoration:underline;font-size:11px">${l.label} ↗</a>`
+                `<a href="${l.url}" target="_blank" rel="noopener noreferrer" style="color:#71717a;text-decoration:none;font-weight:400;font-size:12px">${l.label}</a>`
             )
             .join('')}
         </div>`
       : '';
 
   const dateLine = node.date
-    ? `<div style="font-size:10px;color:#a1a1aa;margin-bottom:2px">${node.date}</div>`
+    ? `<div style="font-size:12px;font-weight:400;color:#71717a;margin-bottom:6px">${node.date}</div>`
     : '';
 
   return `
-    <div style="font-family:ui-sans-serif,system-ui,sans-serif">
+    <div style="font-family:ui-sans-serif,system-ui,sans-serif;font-weight:400">
       <div style="display:flex;align-items:center;gap:6px;margin-bottom:4px">
-        <span style="width:8px;height:8px;border-radius:9999px;background:${color};display:inline-block"></span>
-        <strong style="font-size:12px;color:#18181b">${node.label}</strong>
-        <span style="font-size:10px;color:#a1a1aa;text-transform:uppercase;letter-spacing:.04em">${kind}</span>
+        <span style="width:8px;height:8px;border-radius:9999px;background:${color};display:inline-block;flex-shrink:0"></span>
+        <span style="font-size:14px;font-weight:600;color:#18181b">${node.label}</span>
         ${badge}
       </div>
       ${dateLine}
-      <p style="margin:0;font-size:11px;line-height:1.45;color:#52525b">${desc}</p>
-      <div id="lg-usage" style="margin-top:6px;font-size:11px;color:#71717a"></div>
+      <p style="margin:0;font-size:13px;font-weight:400;line-height:1.5;color:#3f3f46">${desc}</p>
+      <div id="lg-usage" style="margin-top:10px;font-size:13px;font-weight:400;line-height:1.6;color:#3f3f46"></div>
       ${linksHtml}
     </div>`;
 }
@@ -269,14 +270,14 @@ export default function LineageGraph({
         if (l.source === nodeId) {
           const other = index.nodeById.get(l.target);
           if (other) {
-            if (l.label === 'requires') out.push(`This render uses <strong>${other.label}</strong>.`);
-            else out.push(`This ${phrase} <strong>${other.label}</strong>.`);
+            if (l.label === 'requires') out.push(`This render uses <span style="font-weight:600">${other.label}</span>.`);
+            else out.push(`This ${phrase} <span style="font-weight:600">${other.label}</span>.`);
           }
         } else if (l.target === nodeId) {
           const other = index.nodeById.get(l.source);
           if (other) {
-            if (l.label === 'requires') out.push(`<strong>Used directly to generate this image.</strong>`);
-            else out.push(`<strong>${other.label}</strong> ${phrase} this.`);
+            if (l.label === 'requires') out.push(`<span style="font-weight:600">Used directly to generate this image.</span>`);
+            else out.push(`<span style="font-weight:600">${other.label}</span> ${phrase} this.`);
           }
         }
       }
@@ -290,6 +291,11 @@ export default function LineageGraph({
       const svgEl = svgRef.current;
       if (!svgEl) return;
       const svg = d3.select(svgEl);
+      // A previous draw pass may still have an in-flight fit transition or
+      // bound zoom listeners on this same persistent <svg> node (only its
+      // children get wiped below) — clear both so they can't fight this pass.
+      svg.interrupt();
+      svg.on('.zoom', null);
       svg.selectAll('*').remove();
       if (!width || !height) return;
 
@@ -297,15 +303,11 @@ export default function LineageGraph({
       let yearXByYear = new Map<number, number>();
       let yearStripLayer: d3.Selection<SVGGElement, unknown, null, undefined> | null = null;
 
-      const zoomBounds = () => {
-        // Before the initial fit: keep nodes within the original frame so the
-        // fit has a clean, stable bounding box to work from.
-        // After the fit: allow nodes to flow into the zoom-visible area so
-        // panning/zooming reveals more of the graph.
-        if (!hasFittedRef.current) return { w: width, h: height, minX: 0, minY: 0 };
-        const t = zoomRef.current;
-        return { w: width / t.k, h: height / t.k, minX: -t.x / t.k, minY: -t.y / t.k };
-      };
+      // Constrained to the fixed graph frame, independent of zoom — if this
+      // scaled with the zoom transform, zooming in would shrink the "in
+      // bounds" area and yank nodes back toward center. Zooming in should let
+      // nodes go past the frame edge, not fight the user for space.
+      const zoomBounds = () => ({ w: width, h: height, minX: 0, minY: 0 });
 
       const visible = computeVisible(index, expanded, rootId);
       const depth = depthsFrom(index, visible, rootId);
@@ -397,6 +399,9 @@ export default function LineageGraph({
         return 9 + Math.min(6, degree(d.id));
       };
 
+      // Handle for the fit-in tween (see fitToView below), stopped on cleanup.
+      let fitAnimTimer: d3.Timer | null = null;
+
       // ── SVG scaffold ──────────────────────────────────────────────────────
       const defs = svg.append('defs');
       defs.append('filter').attr('id', 'cluster-blur').append('feGaussianBlur').attr('stdDeviation', 10);
@@ -418,19 +423,16 @@ export default function LineageGraph({
       const nodeLayer = root.append('g');
 
 
-      // simRef lets the zoom handler kick the sim without requiring sim to be
-      // defined before zoom is set up.
-      let simRef: d3.Simulation<SimNode, SimLink> | null = null;
-
-      let isFitting = false;
       const zoom = d3
         .zoom<SVGSVGElement, unknown>()
         .scaleExtent([0.2, 4])
         .on('zoom', (e) => {
           zoomRef.current = e.transform;
           root.attr('transform', e.transform.toString());
-          // Always kick the sim so nodes re-settle into any newly revealed space.
-          if (simRef && !isFitting) simRef.alpha(Math.max(simRef.alpha(), 0.15)).restart();
+          // Zooming/panning no longer kicks the simulation — the bounds force
+          // is fixed to the graph frame regardless of zoom, so there's no
+          // "newly revealed space" to resettle into, and restarting the sim
+          // here was what made nodes visibly jump while a user just zoomed in.
           // Reposition year strip labels to stay fixed at top of frame.
           if (yearStripLayer) {
             yearStripLayer.selectAll<SVGTextElement, number>('text')
@@ -660,7 +662,9 @@ export default function LineageGraph({
         const usageEl = popupBody.select<HTMLDivElement>('#lg-usage');
         usageEl.html(
           usage.length
-            ? `<span style="text-transform:uppercase;letter-spacing:.04em;font-size:9px;color:#a1a1aa">In this render</span><br>${usage.join('<br>')}`
+            ? `<div style="font-weight:400;color:#71717a;margin-bottom:6px">In this render:</div>${usage
+                .map((u, i) => `<div style="${i > 0 ? 'margin-top:8px' : ''}">${u}</div>`)
+                .join('')}`
             : ''
         );
         popup.style('display', null);
@@ -719,7 +723,6 @@ export default function LineageGraph({
         .velocityDecay(0.45)
         .alphaDecay(0.03)
         .alpha(0.7);
-      simRef = sim;
 
       if (layout === 'force') {
         sim
@@ -829,12 +832,18 @@ export default function LineageGraph({
         rootNode.fy = height / 2;
       }
 
-      // Give the simulation a synchronous head-start so nodes have meaningful
-      // spread positions even if the RAF-based loop is cancelled before its
-      // first tick fires (e.g. React StrictMode double-mount cleanup).
-      for (let i = 0; i < 30; i++) sim.tick();
+      // Run the simulation to completion synchronously before the first paint,
+      // instead of letting it settle over ~3-4s of async (rAF-driven) ticks.
+      // alphaDecay 0.03 from alpha 0.7 needs ~215 ticks to cross the default
+      // alphaMin — 250 covers that with margin. This is what lets fitToView()
+      // (called right below) frame the *actual* settled layout immediately;
+      // fitting against an early, not-yet-spread-out layout means later ticks
+      // push nodes past whatever frame was already locked in, since the fit
+      // only runs once. Cheap for a graph this size (low tens of ms).
+      for (let i = 0; i < 250; i++) sim.tick();
+      doFit();
 
-      // Fit all nodes into view when the simulation first settles.
+      // Frames the settled layout computed by the head-start above.
       // hasFittedRef persists across redraws caused by ResizeObserver so the
       // fit fires exactly once per data/layout change (hasFittedRef is reset in
       // the useEffect below when the draw callback reference changes).
@@ -854,13 +863,32 @@ export default function LineageGraph({
         const k = Math.min(width / gW, height / gH, 1);
         const tx = (width - (maxX + minX) * k) / 2;
         const ty = (height - (maxY + minY) * k) / 2;
-        const t = d3.zoomIdentity.translate(tx, ty).scale(k);
-        // Instant transform — no animation so ResizeObserver redraws can't
-        // interrupt it, and the zoom handler fires synchronously.
-        isFitting = true;
-        svg.call(zoom.transform, t);
-        isFitting = false;
-        zoomRef.current = t;
+        const target = d3.zoomIdentity.translate(tx, ty).scale(k);
+        // Ease into the fitted view rather than snapping. Driven by a plain
+        // d3.timer (not svg.transition().call(zoom.transform, …)) — the zoom
+        // behaviour gets torn down and rebuilt on every redraw (ResizeObserver
+        // fires several times right after mount), and a zoom-driven transition
+        // started by one redraw silently stalls once a later redraw replaces
+        // the zoom behaviour it depends on. Tweening the transform by hand
+        // sidesteps that entirely.
+        const start = zoomRef.current;
+        const duration = 700;
+        fitAnimTimer?.stop();
+        fitAnimTimer = d3.timer((elapsed) => {
+          const p = Math.min(1, elapsed / duration);
+          const e = d3.easeCubicOut(p);
+          const cur = d3.zoomIdentity
+            .translate(start.x + (target.x - start.x) * e, start.y + (target.y - start.y) * e)
+            .scale(start.k + (target.k - start.k) * e);
+          zoomRef.current = cur;
+          root.attr('transform', cur.toString());
+          if (p >= 1) {
+            // Keep the zoom behaviour's own bookkeeping in sync so the next
+            // user-driven pan/zoom gesture continues smoothly from here.
+            svg.property('__zoom', cur);
+            fitAnimTimer?.stop();
+          }
+        });
       }
 
       sim.on('tick', () => {
@@ -901,10 +929,6 @@ export default function LineageGraph({
           fitToView();
         }
       }
-      sim.on('end', doFit);
-      // Fallback: if the sim never fires 'end' (kept alive by user interaction),
-      // fit after enough ticks to settle (~alphaDecay 0.03 × 215 ticks ≈ 4s).
-      const fitTimer = setTimeout(doFit, 4000);
 
       updatePopup();
 
@@ -930,7 +954,7 @@ export default function LineageGraph({
           })
       );
 
-      return () => { sim.stop(); clearTimeout(fitTimer); };
+      return () => { sim.stop(); fitAnimTimer?.stop(); };
     },
     [index, allLinks, expanded, rootId, layout, imageUrl, imageDimensions, showLinkLabels, linkPhrase]
   );
