@@ -805,14 +805,19 @@ export default function WorkflowWizard() {
   const thumbInputRef = useRef<HTMLInputElement>(null);
   const [isDragging, setIsDragging] = useState(false);
 
-  const [rightPanelWidth, setRightPanelWidth] = useState(380);
+  // null = not yet manually resized, so the panel just flexes to fill
+  // whatever space the (max-width-capped) middle column leaves behind.
+  // Once the user drags the handle, this becomes a fixed pixel width.
+  const [rightPanelWidth, setRightPanelWidth] = useState<number | null>(null);
   const [panelMinimized, setPanelMinimized] = useState(false);
   const panelDragRef = useRef<{ startX: number; startWidth: number } | null>(null);
+  const rightPanelRef = useRef<HTMLDivElement>(null);
   const baselineRef = useRef<string | null>(null);
 
   const handlePanelDragStart = (e: React.MouseEvent) => {
     e.preventDefault();
-    panelDragRef.current = { startX: e.clientX, startWidth: rightPanelWidth };
+    const startWidth = rightPanelRef.current?.getBoundingClientRect().width ?? rightPanelWidth ?? 380;
+    panelDragRef.current = { startX: e.clientX, startWidth };
     const onMove = (ev: MouseEvent) => {
       if (!panelDragRef.current) return;
       const delta = panelDragRef.current.startX - ev.clientX;
@@ -934,7 +939,7 @@ export default function WorkflowWizard() {
             const r = await fetch(`/api/models/${encodeURIComponent(m.modelIdLocal)}`);
             if (r.ok) {
               const d: ModelDetail = await r.json();
-              return { ...m, dbMatch: d };
+              return { ...m, dbMatch: d, provenanceId: d.id };
             }
           }
           // Fall back to filename
@@ -942,7 +947,7 @@ export default function WorkflowWizard() {
             const r = await fetch(`/api/models/by-filename/${encodeURIComponent(m.fileNameLocal)}`);
             if (r.ok) {
               const d: ModelDetail = await r.json();
-              return { ...m, dbMatch: d };
+              return { ...m, dbMatch: d, provenanceId: d.id };
             }
           }
           return { ...m, dbMatch: null };
@@ -1239,8 +1244,10 @@ export default function WorkflowWizard() {
 
       {/* Content area */}
       <div className="flex flex-1 min-w-0 overflow-hidden">
-        {/* Main content column */}
-        <div className="relative flex flex-col flex-1 min-w-0 overflow-hidden">
+        {/* Main content column — capped at its own max content width (800px)
+            instead of flex-1, so it doesn't stretch to a 50/50 split with the
+            code panel; the code panel fills whatever space is left over. */}
+        <div className="relative flex flex-col min-w-0 overflow-hidden" style={{ flex: '0 1 800px' }}>
         {/* Scrollable content */}
         <div className={step === 'preview' ? 'flex-1 overflow-hidden flex flex-col min-h-0' : 'flex-1 overflow-y-auto'}>
           <div className={step === 'preview' ? 'flex-1 flex flex-col min-h-0 px-10 max-w-[800px]' : 'px-10 pb-[100px] max-w-[800px]'}>
@@ -1676,34 +1683,34 @@ export default function WorkflowWizard() {
           {step === 'upload' ? (
             <button disabled className="flex items-center justify-center px-5 py-[6px] gap-[10px] rounded-[8px] bg-white border border-black text-[13px] text-black cursor-default opacity-40">Back</button>
           ) : step === 'requirements' ? (
-            <button onClick={() => setStep('upload')} className="flex items-center justify-center px-5 py-[6px] gap-[10px] rounded-[8px] bg-white border border-black text-[13px] text-black hover:bg-zinc-50 transition-colors">Back</button>
+            <button onClick={() => setStep('upload')} className="flex items-center justify-center px-5 py-[6px] gap-[10px] rounded-[8px] bg-white border border-black text-[13px] text-black hover:bg-zinc-50 cursor-pointer transition-colors">Back</button>
           ) : step === 'possible-models' ? (
-            <button onClick={() => setStep('requirements')} className="flex items-center justify-center px-5 py-[6px] gap-[10px] rounded-[8px] bg-white border border-black text-[13px] text-black hover:bg-zinc-50 transition-colors">Back</button>
+            <button onClick={() => setStep('requirements')} className="flex items-center justify-center px-5 py-[6px] gap-[10px] rounded-[8px] bg-white border border-black text-[13px] text-black hover:bg-zinc-50 cursor-pointer transition-colors">Back</button>
           ) : step === 'variables' ? (
-            <button onClick={() => setStep('possible-models')} className="flex items-center justify-center px-5 py-[6px] gap-[10px] rounded-[8px] bg-white border border-black text-[13px] text-black hover:bg-zinc-50 transition-colors">Back</button>
+            <button onClick={() => setStep('possible-models')} className="flex items-center justify-center px-5 py-[6px] gap-[10px] rounded-[8px] bg-white border border-black text-[13px] text-black hover:bg-zinc-50 cursor-pointer transition-colors">Back</button>
           ) : step === 'metadata' ? (
-            <button onClick={() => setStep('variables')} className="flex items-center justify-center px-5 py-[6px] gap-[10px] rounded-[8px] bg-white border border-black text-[13px] text-black hover:bg-zinc-50 transition-colors">Back</button>
+            <button onClick={() => setStep('variables')} className="flex items-center justify-center px-5 py-[6px] gap-[10px] rounded-[8px] bg-white border border-black text-[13px] text-black hover:bg-zinc-50 cursor-pointer transition-colors">Back</button>
           ) : (
-            <button onClick={() => setStep('metadata')} className="flex items-center justify-center px-5 py-[6px] gap-[10px] rounded-[8px] bg-white border border-black text-[13px] text-black hover:bg-zinc-50 transition-colors">Back</button>
+            <button onClick={() => setStep('metadata')} className="flex items-center justify-center px-5 py-[6px] gap-[10px] rounded-[8px] bg-white border border-black text-[13px] text-black hover:bg-zinc-50 cursor-pointer transition-colors">Back</button>
           )}
           {step === 'upload' ? (
             <button
               disabled={rawGraph === null || !!blockingError || matchLoading}
               onClick={handleContinueFromUpload}
-              className="flex items-center justify-center px-5 py-[6px] gap-[10px] rounded-[8px] bg-black text-[13px] text-white hover:bg-[#1a1a1a] disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+              className="flex items-center justify-center px-5 py-[6px] gap-[10px] rounded-[8px] bg-black text-[13px] text-white hover:opacity-60 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed transition-opacity"
             >
               {matchLoading ? 'Looking up models…' : 'Next'}
             </button>
           ) : step === 'requirements' ? (
-            <button onClick={() => setStep('possible-models')} className="flex items-center justify-center px-5 py-[6px] gap-[10px] rounded-[8px] bg-black text-[13px] text-white hover:bg-[#1a1a1a] transition-colors">Next</button>
+            <button onClick={() => setStep('possible-models')} className="flex items-center justify-center px-5 py-[6px] gap-[10px] rounded-[8px] bg-black text-[13px] text-white hover:opacity-60 cursor-pointer transition-opacity">Next</button>
           ) : step === 'possible-models' ? (
-            <button onClick={() => setStep('variables')} className="flex items-center justify-center px-5 py-[6px] gap-[10px] rounded-[8px] bg-black text-[13px] text-white hover:bg-[#1a1a1a] transition-colors">Next</button>
+            <button onClick={() => setStep('variables')} className="flex items-center justify-center px-5 py-[6px] gap-[10px] rounded-[8px] bg-black text-[13px] text-white hover:opacity-60 cursor-pointer transition-opacity">Next</button>
           ) : step === 'variables' ? (
-            <button onClick={handleContinueFromVariables} className="flex items-center justify-center px-5 py-[6px] gap-[10px] rounded-[8px] bg-black text-[13px] text-white hover:bg-[#1a1a1a] transition-colors">Next</button>
+            <button onClick={handleContinueFromVariables} className="flex items-center justify-center px-5 py-[6px] gap-[10px] rounded-[8px] bg-black text-[13px] text-white hover:opacity-60 cursor-pointer transition-opacity">Next</button>
           ) : step === 'metadata' ? (
-            <button disabled={!workflowName} onClick={() => setStep('preview')} className="flex items-center justify-center px-5 py-[6px] gap-[10px] rounded-[8px] bg-black text-[13px] text-white hover:bg-[#1a1a1a] disabled:opacity-40 transition-colors">Next</button>
+            <button disabled={!workflowName} onClick={() => setStep('preview')} className="flex items-center justify-center px-5 py-[6px] gap-[10px] rounded-[8px] bg-black text-[13px] text-white hover:opacity-60 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed transition-opacity">Next</button>
           ) : (
-            <button onClick={() => router.push('/')} className="flex items-center justify-center px-5 py-[6px] gap-[10px] rounded-[8px] bg-black text-[13px] text-white hover:bg-[#1a1a1a] transition-colors">Done</button>
+            <button onClick={() => router.push('/')} className="flex items-center justify-center px-5 py-[6px] gap-[10px] rounded-[8px] bg-black text-[13px] text-white hover:opacity-60 cursor-pointer transition-opacity">Done</button>
           )}
         </div>
         </div>{/* end main content column */}
@@ -1712,7 +1719,7 @@ export default function WorkflowWizard() {
         {rawGraph !== null && step !== 'preview' && (
           panelMinimized ? (
             <div
-              className="shrink-0 border-l border-t border-b border-[#E9E9E9] rounded-l-[8px] flex items-center justify-center cursor-pointer hover:bg-zinc-50 transition-colors mb-6"
+              className="shrink-0 ml-auto border-l border-t border-b border-[#E9E9E9] rounded-l-[8px] flex items-center justify-center cursor-pointer hover:bg-zinc-50 transition-colors mb-6"
               style={{ width: 32 }}
               onClick={() => setPanelMinimized(false)}
             >
@@ -1725,7 +1732,16 @@ export default function WorkflowWizard() {
             </div>
           ) : (
             <div
-              className="flex-1 min-w-[280px] border border-[#E9E9E9] rounded-[8px] flex flex-col overflow-hidden relative mr-6 mb-6"
+              ref={rightPanelRef}
+              className={cn(
+                'min-w-[280px] border border-[#E9E9E9] rounded-[8px] flex flex-col overflow-hidden relative mr-6 mb-6',
+                // Once given a fixed width it stops growing, so without ml-auto
+                // the flex row packs it left (flex-start) instead of leaving
+                // any slack space on the right — it'd drift away from the
+                // right edge as soon as it's narrower than the leftover space.
+                rightPanelWidth == null ? 'flex-1' : 'shrink-0 ml-auto'
+              )}
+              style={rightPanelWidth != null ? { width: rightPanelWidth } : undefined}
             >
               {/* Drag handle on the left edge */}
               <div

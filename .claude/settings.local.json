@@ -8,7 +8,14 @@
       "Bash(npx tsc *)",
       "Bash(git -C /Users/ednaho/pseudorandom-provenance status)",
       "Bash(git -C /Users/ednaho/pseudorandom-provenance diff)",
-      "Bash(git -C /Users/ednaho/pseudorandom-provenance log --oneline -5)"
+      "Bash(git -C /Users/ednaho/pseudorandom-provenance log --oneline -5)",
+      "Bash(git -C /Users/ednaho/pseudorandom-provenance checkout -b edna/image-drop-redesign)",
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)",
+      "Bash(git commit -m 'Auto-fit lineage graph on first load of provenance tab *)",
+      "Bash(git push *)",
+      "Bash(git checkout *)",
+      "Bash(git pull *)"
     ]
   }
 }
