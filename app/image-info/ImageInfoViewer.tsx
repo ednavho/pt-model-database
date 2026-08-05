@@ -1,7 +1,9 @@
 'use client';
 
+import RiskBadge from '@/components/ui/RiskBadge';
 import VettingBadge from '@/components/ui/VettingBadge';
 import { MODEL_FILE_TO_NODE, lineageLinks, lineageNodes, type LineageLink, type LineageNode } from '@/data/lineageData';
+import { EMPTY_PROVENANCE, computeReviewStatus, type ModelProvenance, type ReviewStatus } from '@/lib/modelCards';
 import type { VettingStatus } from '@/types/database';
 import { cn } from '@/utils/cn';
 import { useCallback, useMemo, useRef, useState } from 'react';
@@ -19,7 +21,8 @@ type EnvironmentalData = {
   has_environmental_data?: boolean;
 };
 
-type Provenance = {
+/** Flat shape embedded by pre-migration renders — mirrors the old Supabase `models` row. */
+type LegacyProvenance = {
   download_url?: string | null;
   attribution?: string | null;
   attribution_url?: string | null;
@@ -31,25 +34,33 @@ type Provenance = {
 type Requirement = {
   category: string;
   requirement: string;
-  provenance_id: string | null;
-  vetting_status: string | null;
-  provenance: Provenance | null;
-};
-
-type LineageItem = {
-  id: string;
-  relationship_label: string;
-  related_type: string;
-  related_id: string;
-  related_name: string;
+  display_name: string | null;
+  /** Hugging Face repo path — set on images rendered after the migration.
+   *  The only pointer this app ever resolves against a live API; there is
+   *  no Supabase connection anywhere in this feature. A pre-migration
+   *  image's Supabase `provenance_id` (if present in its metadata) is
+   *  simply never read — those requirements fall back to whatever
+   *  provenance was embedded at render time, same as any unpointed one. */
+  record_id: string | null;
+  /** Legacy flat status string — only present on pre-migration images,
+   *  read straight from the PNG's own embedded metadata. */
+  legacyVettingStatus: string | null;
+  /** Whatever was embedded at render time, normalized to the current
+   *  ModelProvenance shape whether it came from the old flat schema or the
+   *  new nested one — so everything downstream deals with one shape. */
+  provenance: ModelProvenance;
 };
 
 type Resolved = Requirement & {
   source: 'database' | 'embedded' | 'none';
-  data: Provenance;
+  data: ModelProvenance;
   name: string | null;
   pointerBroken: boolean;
-  lineage: LineageItem[];
+  /** Synthesized 5-level status, only for new-style (Hugging Face-sourced
+   *  or new-schema-embedded) requirements. null for legacy pre-migration
+   *  requirements, which render their own vetting_status tri-state via
+   *  VettingBadge instead — the two aren't the same shape and don't merge. */
+  status: ReviewStatus | null;
 };
 
 type ParseResult =
@@ -72,17 +83,50 @@ function readEnvironmental(rec: Record<string, unknown>): EnvironmentalData | nu
   return env as EnvironmentalData;
 }
 
+/**
+ * Old embedded/DB shape -> current ModelProvenance shape, so the rest of
+ * this file only ever deals with one provenance shape regardless of when
+ * the image was rendered. data_provenance_notes has no direct analog in
+ * the new schema; `evidence` is the closest fit (its own field
+ * description already covers "training-data evidence").
+ */
+function normalizeLegacyProvenance(p: LegacyProvenance): ModelProvenance {
+  return {
+    ...EMPTY_PROVENANCE,
+    download_url: p.download_url ?? null,
+    size_bytes: p.size_bytes ?? null,
+    license_id: p.license ?? null,
+    attribution_name: p.attribution ?? null,
+    attribution_url: p.attribution_url ?? null,
+    evidence: p.data_provenance_notes ?? null,
+  };
+}
+
+/** New- vs old-schema embedded provenance don't share any key names, so
+ *  presence of a new-only key is enough to tell them apart. */
+function isNewProvenance(p: Record<string, unknown>): boolean {
+  return 'license_id' in p || 'attribution_name' in p || 'risk_severity' in p;
+}
+
 function toRequirement(v: unknown): Requirement | null {
   if (!v || typeof v !== 'object') return null;
   const r = v as Record<string, unknown>;
   if (typeof r.requirement !== 'string') return null;
-  const p = r.provenance;
+  const raw = r.provenance && typeof r.provenance === 'object' ? (r.provenance as Record<string, unknown>) : null;
+
+  const provenance: ModelProvenance = !raw
+    ? EMPTY_PROVENANCE
+    : isNewProvenance(raw)
+      ? ({ ...EMPTY_PROVENANCE, ...raw } as ModelProvenance)
+      : normalizeLegacyProvenance(raw as LegacyProvenance);
+
   return {
     category: typeof r.category === 'string' ? r.category : '—',
     requirement: r.requirement,
-    provenance_id: typeof r.provenance_id === 'string' ? r.provenance_id : null,
-    vetting_status: typeof r.vetting_status === 'string' ? r.vetting_status : null,
-    provenance: p && typeof p === 'object' ? (p as Provenance) : null,
+    display_name: typeof r.display_name === 'string' ? r.display_name : null,
+    record_id: typeof r.record_id === 'string' ? r.record_id : null,
+    legacyVettingStatus: typeof r.vetting_status === 'string' ? r.vetting_status : null,
+    provenance,
   };
 }
 
@@ -141,42 +185,75 @@ function parsePng(buffer: ArrayBuffer): ParseResult {
 
 // ── Pointer resolution ───────────────────────────────────────────────────────
 
+/** True once at least one review-relevant field is actually filled in — a
+ *  provenance object that's structurally present but entirely null/-1
+ *  (the default for an unmatched requirement) shouldn't count as "there is
+ *  embedded data" for source-labeling purposes. */
+function hasRealData(p: ModelProvenance): boolean {
+  return Object.values(p).some((v) => v !== null && v !== undefined && v !== '' && v !== -1);
+}
+
+/**
+ * Resolves every requirement's display data. The only network call this
+ * makes is to the Hugging Face-backed /api/models/hf/:id route — there is
+ * no Supabase connection anywhere in this feature. A requirement with a
+ * record_id gets the live card; everything else (no pointer, or a
+ * pre-migration image's Supabase provenance_id, which is never read)
+ * falls back to whatever provenance was embedded in the PNG at render
+ * time — offline data, exactly as good as it was the day the image was
+ * rendered.
+ */
 async function resolveRequirements(reqs: Requirement[]): Promise<Resolved[]> {
-  const ids = [...new Set(reqs.map((r) => r.provenance_id).filter(Boolean))] as string[];
-  const [records, lineages] = await Promise.all([
-    Promise.all(ids.map((id) => fetch(`/api/models/${id}`).then((r) => (r.ok ? r.json() : null)).catch(() => null))),
-    Promise.all(ids.map((id) => fetch(`/api/models/${id}/lineage`).then((r) => (r.ok ? r.json() : [])).catch(() => []))),
-  ]);
-  const byId = new Map<string, Record<string, unknown>>();
-  const lineageById = new Map<string, LineageItem[]>();
-  ids.forEach((id, i) => {
-    if (records[i]) byId.set(id, records[i]);
-    if (Array.isArray(lineages[i])) lineageById.set(id, lineages[i]);
-  });
-  return reqs.map((r) => {
-    const lineage = r.provenance_id ? (lineageById.get(r.provenance_id) ?? []) : [];
-    const db = r.provenance_id ? byId.get(r.provenance_id) : undefined;
-    if (db) {
-      return {
-        ...r,
-        source: 'database' as const,
-        name: (db.name as string) ?? null,
-        vetting_status: (db.vetting_status as string) ?? r.vetting_status,
-        pointerBroken: false,
-        lineage,
-        data: {
-          download_url: db.download_url as string | null,
-          attribution: db.attribution as string | null,
-          attribution_url: db.attribution_url as string | null,
-          license: db.license as string | null,
-          data_provenance_notes: db.data_provenance_notes as string | null,
-          size_bytes: db.size_bytes as number | null,
-        },
-      };
+  const recordIds = [...new Set(reqs.map((r) => r.record_id).filter(Boolean))] as string[];
+
+  const hfRecords = await Promise.all(
+    recordIds.map((id) =>
+      fetch(`/api/models/hf/${id.split('/').map(encodeURIComponent).join('/')}`)
+        .then((r) => (r.ok ? r.json() : null))
+        .catch(() => null)
+    )
+  );
+  const hfById = new Map<string, Record<string, unknown>>();
+  recordIds.forEach((id, i) => { if (hfRecords[i]) hfById.set(id, hfRecords[i]); });
+
+  return reqs.map((r): Resolved => {
+    if (r.record_id) {
+      const hf = hfById.get(r.record_id);
+      if (hf) {
+        return {
+          ...r,
+          source: 'database',
+          name: (hf.display_name as string) ?? r.display_name,
+          pointerBroken: false,
+          data: hf.provenance as ModelProvenance,
+          status: hf.status as ReviewStatus,
+        };
+      }
+      return { ...r, source: 'none', name: r.display_name, pointerBroken: true, data: EMPTY_PROVENANCE, status: 'unknown' };
     }
-    const embedded = r.provenance ?? {};
-    const hasAny = Object.values(embedded).some((v) => v !== null && v !== undefined && v !== '');
-    return { ...r, source: hasAny ? ('embedded' as const) : ('none' as const), name: null, pointerBroken: r.provenance_id !== null, lineage, data: embedded };
+
+    // No pointer, or a legacy Supabase pointer we don't chase — whatever
+    // was embedded is all there is.
+    const hasData = hasRealData(r.provenance);
+    // A pre-migration render always embedded vetting_status inline (never
+    // just a DB pointer for it), so its presence is the signal that this
+    // is old-schema data with no risk_severity/etc. concept at all — not
+    // "new-schema data that happens to be unreviewed". Synthesizing a
+    // status from normalizeLegacyProvenance's -1 defaults in that case
+    // would show "Not Yet Reviewed" instead of the real embedded
+    // vetting_status, so status stays null and VettingBadge takes over.
+    const status =
+      r.legacyVettingStatus === null && hasData
+        ? computeReviewStatus(r.provenance.risk_severity, r.provenance.evidence_completeness, r.provenance.evidence_reliability)
+        : null;
+    return {
+      ...r,
+      source: hasData ? 'embedded' : 'none',
+      name: r.display_name,
+      pointerBroken: false,
+      data: r.provenance,
+      status,
+    };
   });
 }
 
@@ -319,18 +396,27 @@ function RequirementCard({ req }: { req: Resolved }) {
 
   const rows: { label: string; value: React.ReactNode }[] = [];
   if (req.category) rows.push({ label: 'Category', value: req.category });
-  if (data.attribution) rows.push({ label: 'Attribution', value: data.attribution });
+  if (data.attribution_name) rows.push({ label: 'Attribution', value: data.attribution_name });
   if (data.attribution_url) rows.push({
-    label: 'Source',
+    label: 'Attribution URL',
     value: <a href={data.attribution_url} target="_blank" rel="noopener noreferrer" className="text-black underline underline-offset-2 hover:opacity-60 break-all">{data.attribution_url} <span className="inline-block">↗</span></a>,
   });
-  if (data.license) rows.push({ label: 'License', value: data.license });
+  if (data.license_id || data.license_url) rows.push({
+    label: 'License',
+    value: data.license_url ? (
+      <a href={data.license_url} target="_blank" rel="noopener noreferrer" className="text-black underline underline-offset-2 hover:opacity-60 break-all">{data.license_id ?? data.license_url} <span className="inline-block">↗</span></a>
+    ) : data.license_id,
+  });
   if (data.download_url) rows.push({
     label: 'Download',
     value: <a href={data.download_url} target="_blank" rel="noopener noreferrer" className="text-black underline underline-offset-2 hover:opacity-60 break-all">{data.download_url} <span className="inline-block">↗</span></a>,
   });
   if (size) rows.push({ label: 'Size', value: size });
-  if (data.data_provenance_notes) rows.push({ label: 'Training data', value: data.data_provenance_notes });
+  if (data.reviewer) rows.push({ label: 'Reviewer', value: data.reviewer });
+  if (data.reviewed_at) rows.push({ label: 'Reviewed at', value: data.reviewed_at });
+  if (data.license_findings) rows.push({ label: 'License findings', value: data.license_findings });
+  if (data.evidence) rows.push({ label: 'Evidence', value: data.evidence });
+  if (data.rationale) rows.push({ label: 'Rationale', value: data.rationale });
 
   return (
     <div className="border border-[#E9E9E9] rounded-[8px] px-5 py-4">
@@ -340,8 +426,9 @@ function RequirementCard({ req }: { req: Resolved }) {
           {req.name && <p className="text-[12px] text-[#939393] font-mono break-all mt-0.5">{req.requirement}</p>}
         </div>
         <div className="flex items-center gap-2 shrink-0">
-          {!isExtension && req.vetting_status && (
-            <VettingBadge status={req.vetting_status.toLowerCase() as VettingStatus} />
+          {!isExtension && req.status && <RiskBadge record={{ status: req.status }} />}
+          {!isExtension && !req.status && req.legacyVettingStatus && (
+            <VettingBadge status={req.legacyVettingStatus.toLowerCase() as VettingStatus} />
           )}
         </div>
       </div>
@@ -652,7 +739,7 @@ export default function ImageInfoViewer() {
                         {resolving && <p className="text-[13px] text-[#939393]">Checking database…</p>}
                         {(resolved.length > 0
                           ? resolved
-                          : result.requirements.map((r): Resolved => ({ ...r, source: 'none', data: {}, name: null, pointerBroken: false, lineage: [] }))
+                          : result.requirements.map((r): Resolved => ({ ...r, source: 'none', data: EMPTY_PROVENANCE, name: null, pointerBroken: false, status: null }))
                         ).map((req, i) => (
                           <RequirementCard key={`${req.requirement}-${i}`} req={req} />
                         ))}

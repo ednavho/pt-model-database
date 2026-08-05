@@ -23,7 +23,8 @@ import {
   type VarType,
 } from '@/config/pseudoNodeTypes';
 import JsonTree from '@/components/ui/JsonTree';
-import { ModelDetail } from '@/types/database';
+import RiskBadge from '@/components/ui/RiskBadge';
+import { EMPTY_PROVENANCE, type ModelCardRecord } from '@/lib/modelCards';
 import { cn } from '@/utils/cn';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
@@ -102,32 +103,40 @@ function looksLikeApiExport(parsed: unknown): boolean {
 
 type AlertMessage = { title: string; message: string };
 
+/**
+ * Provenance fields collected by hand for a model that isn't in the
+ * database — deliberately a smaller set than ModelProvenance: no
+ * reviewer/reviewed_at/license_findings/evidence/rationale/risk scores,
+ * since none of that review data exists for a model nobody has vetted.
+ */
 type ManualProvenance = {
   download_url: string;
-  attribution: string;
+  size_bytes: string;
+  license_id: string;
+  license_url: string;
+  attribution_name: string;
   attribution_url: string;
-  license: string;
-  data_provenance_notes: string;
 };
 
 const emptyProvenance: ManualProvenance = {
   download_url: '',
-  attribution: '',
+  size_bytes: '',
+  license_id: '',
+  license_url: '',
+  attribution_name: '',
   attribution_url: '',
-  license: '',
-  data_provenance_notes: '',
 };
 
 /** A model the nerd picked via PseudoVettedModelLoader — authoritative. */
 type DbModel = {
   nodeId: string;
   class_type: string;
-  provenanceId: string;
+  recordId: string;
   nameLocal: string;
   modelIdLocal: string;
   fileNameLocal: string;
   categoryLocal: string;
-  dbMatch: ModelDetail | null;
+  dbMatch: ModelCardRecord | null;
 };
 
 /**
@@ -323,7 +332,7 @@ function analyze(parsed: unknown): Analysis {
       return {
         nodeId: n.id,
         class_type: n.class_type,
-        provenanceId: '',
+        recordId: '',
         nameLocal: '',
         modelIdLocal: String(n.get('model_id') ?? ''),
         fileNameLocal: String(n.get(spec.filenameField) ?? ''),
@@ -470,8 +479,6 @@ function validateVariables(vars: DetectedVariable[]): string[] {
 
 // ── Shared styles ───────────────────────────────────────────────────────────
 
-const inputClass =
-  'block w-full border border-zinc-300 rounded-sm px-3 py-2 text-sm text-zinc-900 bg-white focus:outline-none focus:ring-1 focus:ring-zinc-400';
 const labelClass = 'block text-xs font-semibold uppercase tracking-wide text-zinc-400 mb-1';
 
 /**
@@ -653,23 +660,6 @@ const CAP_LABELS: Record<string, { name: string; type?: string }> = {
   edge: { name: 'Edge' },
 };
 
-function StatusBadge({ status }: { status: string }) {
-  const s = status.toLowerCase();
-  const cls =
-    s === 'vetted' ? 'bg-green-50 text-green-700 border-green-200'
-    : s === 'potentially_problematic' ? 'bg-orange-50 text-orange-700 border-orange-200'
-    : 'bg-red-50 text-red-700 border-red-200';
-  const label =
-    s === 'vetted' ? 'Vetted'
-    : s === 'potentially_problematic' ? 'Potentially Problematic'
-    : 'Unknown';
-  return (
-    <span className={cn('inline-flex items-center px-2 py-0.5 text-[11px] border rounded-[8px] font-medium', cls)}>
-      {label}
-    </span>
-  );
-}
-
 function SelectInput({ className, ...props }: React.SelectHTMLAttributes<HTMLSelectElement> & { className?: string }) {
   return (
     <div className="relative">
@@ -678,64 +668,6 @@ function SelectInput({ className, ...props }: React.SelectHTMLAttributes<HTMLSel
         <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
           <path d="M2.5 4.5L6 8L9.5 4.5" />
         </svg>
-      </div>
-    </div>
-  );
-}
-
-function ProvenanceFields({
-  value,
-  onChange,
-}: {
-  value: ManualProvenance;
-  onChange: (field: keyof ManualProvenance, v: string) => void;
-}) {
-  return (
-    <div className="grid md:grid-cols-2 gap-3">
-      <div>
-        <FieldLabel tip="Direct link to the model file itself. The plugin uses this to fetch the model when someone is missing it.">Download URL</FieldLabel>
-        <input
-          className={inputClass}
-          value={value.download_url}
-          onChange={(e) => onChange('download_url', e.target.value)}
-          placeholder="https://huggingface.co/…"
-        />
-      </div>
-      <div>
-        <FieldLabel tip="The licence the model is released under, e.g. CreativeML Open RAIL-M. Tells people what they are allowed to do with what they make.">License</FieldLabel>
-        <input
-          className={inputClass}
-          value={value.license}
-          onChange={(e) => onChange('license', e.target.value)}
-          placeholder="e.g. Apache 2.0"
-        />
-      </div>
-      <div>
-        <FieldLabel tip="Who made the model. Shown as the credit line to anyone using this workflow.">Attribution</FieldLabel>
-        <input
-          className={inputClass}
-          value={value.attribution}
-          onChange={(e) => onChange('attribution', e.target.value)}
-          placeholder="Creator or org"
-        />
-      </div>
-      <div>
-        <FieldLabel tip="Link to the model's original page or its author, so the credit can be followed back to the source.">Attribution URL</FieldLabel>
-        <input
-          className={inputClass}
-          value={value.attribution_url}
-          onChange={(e) => onChange('attribution_url', e.target.value)}
-          placeholder="https://…"
-        />
-      </div>
-      <div className="md:col-span-2">
-        <FieldLabel tip="What the model was trained on, and anything known about its dataset, lineage, or licensing concerns.">Data Provenance Notes</FieldLabel>
-        <textarea
-          className={cn(inputClass, 'min-h-[60px] resize-y')}
-          value={value.data_provenance_notes}
-          onChange={(e) => onChange('data_provenance_notes', e.target.value)}
-          placeholder="Training data, known issues, lineage…"
-        />
       </div>
     </div>
   );
@@ -931,23 +863,26 @@ export default function WorkflowWizard() {
     if (!rawGraph) return;
     setMatchLoading(true);
     try {
-      // Look up each model: by ID first (authoritative), filename as fallback.
+      // Look up each model: by record_id first (the pointer, authoritative),
+      // filename as fallback. model_id is now a Hugging Face repo path
+      // (e.g. "pseudotools/checkpoint-juggernaut-x-hyper"); the fallback
+      // searches by requirement (the card's filename field) when that
+      // pointer is missing.
       const updatedDbModels = await Promise.all(
         dbModels.map(async (m) => {
-          // Try model_id first
           if (m.modelIdLocal) {
-            const r = await fetch(`/api/models/${encodeURIComponent(m.modelIdLocal)}`);
+            const path = m.modelIdLocal.split('/').map(encodeURIComponent).join('/');
+            const r = await fetch(`/api/models/hf/${path}`);
             if (r.ok) {
-              const d: ModelDetail = await r.json();
-              return { ...m, dbMatch: d, provenanceId: d.id };
+              const d: ModelCardRecord = await r.json();
+              return { ...m, dbMatch: d, recordId: d.record_id };
             }
           }
-          // Fall back to filename
           if (m.fileNameLocal) {
-            const r = await fetch(`/api/models/by-filename/${encodeURIComponent(m.fileNameLocal)}`);
+            const r = await fetch(`/api/models/hf/by-filename/${encodeURIComponent(m.fileNameLocal)}`);
             if (r.ok) {
-              const d: ModelDetail = await r.json();
-              return { ...m, dbMatch: d, provenanceId: d.id };
+              const d: ModelCardRecord = await r.json();
+              return { ...m, dbMatch: d, recordId: d.record_id };
             }
           }
           return { ...m, dbMatch: null };
@@ -1049,51 +984,48 @@ export default function WorkflowWizard() {
   // ── Step 6: Assemble output ───────────────────────────────────────────────
 
   const buildOutput = () => {
-    const fromManual = (p: ManualProvenance) => {
-      const out: Record<string, unknown> = {};
-      if (p.download_url) out.download_url = p.download_url;
-      if (p.attribution) out.attribution = p.attribution;
-      if (p.attribution_url) out.attribution_url = p.attribution_url;
-      if (p.license) out.license = p.license;
-      if (p.data_provenance_notes) out.data_provenance_notes = p.data_provenance_notes;
-      return out;
-    };
+    // A requirement matched against the database (vetted) carries the full
+    // 14-key provenance object, verbatim from the matched card — reusing
+    // ModelProvenance means this and the pseudorandom model provenance API
+    // response are always the same shape by construction, not by
+    // convention. A requirement added by hand (not vetted) never had that
+    // review data collected, so it gets the smaller 6-key provenance
+    // instead, per the schema Kyle and Edna settled on.
+    const provenanceFromManual = (p: ManualProvenance) => ({
+      download_url: p.download_url || null,
+      size_bytes: p.size_bytes.trim() ? Number(p.size_bytes) || null : null,
+      license_id: p.license_id || null,
+      license_url: p.license_url || null,
+      attribution_name: p.attribution_name || null,
+      attribution_url: p.attribution_url || null,
+    });
 
     // Every requirement gets the same shape: the pointer when we have one, and
     // a frozen copy of the provenance as the offline fallback.
     const dbRequirements = dbModels.map((m) => {
       const d = m.dbMatch;
-      const provenance: Record<string, unknown> = {};
-      if (d) {
-        if (d.download_url) provenance.download_url = d.download_url;
-        if (d.attribution) provenance.attribution = d.attribution;
-        if (d.attribution_url) provenance.attribution_url = d.attribution_url;
-        if (d.license) provenance.license = d.license;
-        if (d.data_provenance_notes) provenance.data_provenance_notes = d.data_provenance_notes;
-        if (d.size_bytes) provenance.size_bytes = d.size_bytes;
-      }
       return {
-        category: (d?.category ?? m.categoryLocal).toLowerCase(),
-        requirement: d?.file_name ?? m.fileNameLocal,
-        provenance_id: m.provenanceId || null,
-        // The DB stores these Title Case; the workflow schema wants slugs.
-        vetting_status: (d?.vetting_status ?? 'unknown').toLowerCase(),
-        ...(Object.keys(provenance).length > 0 ? { provenance } : {}),
+        display_name: d?.display_name || m.fileNameLocal,
+        // m.categoryLocal (ComfyUI folder name, e.g. "checkpoints") rather
+        // than d?.category (the card's own singular label, e.g.
+        // "checkpoint") — this is what determines where the file lands on
+        // disk, so it needs to stay consistent whether or not the DB match
+        // succeeded. Worth confirming this is the right call.
+        category: m.categoryLocal.toLowerCase(),
+        requirement: d?.requirement ?? m.fileNameLocal,
+        record_id: m.recordId || null,
+        provenance: d?.provenance ?? EMPTY_PROVENANCE,
       };
     });
 
     const scannedRequirements = possibleModels
       .filter((p) => p.selected && p.fileName.trim())
-      .map((p) => {
-        const provenance = fromManual(p.provenance);
-        return {
-          category: p.category,
-          requirement: p.fileName.trim(),
-          provenance_id: null,
-          vetting_status: 'unknown',
-          ...(Object.keys(provenance).length > 0 ? { provenance } : {}),
-        };
-      });
+      .map((p) => ({
+        display_name: p.fileName.trim(),
+        category: p.category,
+        requirement: p.fileName.trim(),
+        provenance: provenanceFromManual(p.provenance),
+      }));
 
     // Shape and key order follow the shipped pseudorandom workflows: name,
     // type, description, default, binds_to, then min/max/step for numerics.
@@ -1321,29 +1253,29 @@ export default function WorkflowWizard() {
               dbModels.map((m) => (
                 <div key={m.nodeId} className="border border-[#E9E9E9] rounded-[8px] p-5">
                   <p className="text-[15px] font-semibold text-black">
-                    {m.dbMatch?.name ?? (m.fileNameLocal || `(${m.class_type})`)}
+                    {m.dbMatch?.display_name ?? (m.fileNameLocal || `(${m.class_type})`)}
                   </p>
                   <p className="text-[12px] text-[#939393] font-mono mt-0.5">
-                    {m.dbMatch?.file_name ?? m.fileNameLocal}
+                    {m.dbMatch?.requirement ?? m.fileNameLocal}
                   </p>
 
                   {m.dbMatch ? (
-                    <div className="mt-4 grid gap-4" style={{ gridTemplateColumns: '1fr 1fr 2fr 2fr' }}>
+                    <div className="mt-4 grid gap-6" style={{ gridTemplateColumns: '1fr 2fr 2fr 2fr' }}>
                       <div>
-                        <p className="text-[12px] text-[#939393] mb-1">category:</p>
+                        <p className="text-[12px] text-[#939393] mb-1">Category</p>
                         <p className="text-[13px] text-black capitalize">{m.dbMatch.category}</p>
                       </div>
                       <div>
-                        <p className="text-[12px] text-[#939393] mb-1">status:</p>
-                        <StatusBadge status={m.dbMatch.vetting_status} />
+                        <p className="text-[12px] text-[#939393] mb-1">Status</p>
+                        <RiskBadge record={m.dbMatch} />
                       </div>
                       <div>
-                        <p className="text-[12px] text-[#939393] mb-1">license:</p>
-                        <p className="text-[13px] text-black">{m.dbMatch.license ?? '—'}</p>
+                        <p className="text-[12px] text-[#939393] mb-1">License</p>
+                        <p className="text-[13px] text-black">{m.dbMatch.provenance.license_id ?? '—'}</p>
                       </div>
                       <div>
-                        <p className="text-[12px] text-[#939393] mb-1">attribution:</p>
-                        <p className="text-[13px] text-black">{m.dbMatch.attribution ?? '—'}</p>
+                        <p className="text-[12px] text-[#939393] mb-1">Attribution</p>
+                        <p className="text-[13px] text-black">{m.dbMatch.provenance.attribution_name ?? '—'}</p>
                       </div>
                     </div>
                   ) : (
@@ -1433,11 +1365,12 @@ export default function WorkflowWizard() {
                               </div>
                               <div className="grid grid-cols-2 gap-4">
                                 <div><label className={CARD_LABEL}>Download URL <InfoTooltip text="Where to download this model" /></label><input className={CARD_INPUT} value={p.provenance.download_url} onChange={(e) => updatePossibleProvenance(p.key, 'download_url', e.target.value)} placeholder="https://huggingface.co/..." /></div>
-                                <div><label className={CARD_LABEL}>License <InfoTooltip text="License governing use of this model" /></label><input className={CARD_INPUT} value={p.provenance.license} onChange={(e) => updatePossibleProvenance(p.key, 'license', e.target.value)} placeholder="e.g. Apache 2.0" /></div>
-                                <div><label className={CARD_LABEL}>Attribution <InfoTooltip text="Credit the creator or source of this model" /></label><input className={CARD_INPUT} value={p.provenance.attribution} onChange={(e) => updatePossibleProvenance(p.key, 'attribution', e.target.value)} placeholder="Creator or organization" /></div>
+                                <div><label className={CARD_LABEL}>Size (bytes) <InfoTooltip text="File size in bytes" /></label><input type="number" className={CARD_INPUT} value={p.provenance.size_bytes} onChange={(e) => updatePossibleProvenance(p.key, 'size_bytes', e.target.value)} placeholder="e.g. 7105348616" /></div>
+                                <div><label className={CARD_LABEL}>License ID <InfoTooltip text="License governing use of this model" /></label><input className={CARD_INPUT} value={p.provenance.license_id} onChange={(e) => updatePossibleProvenance(p.key, 'license_id', e.target.value)} placeholder="e.g. Apache 2.0" /></div>
+                                <div><label className={CARD_LABEL}>License URL <InfoTooltip text="Link to the license text" /></label><input className={CARD_INPUT} value={p.provenance.license_url} onChange={(e) => updatePossibleProvenance(p.key, 'license_url', e.target.value)} placeholder="https://..." /></div>
+                                <div><label className={CARD_LABEL}>Attribution <InfoTooltip text="Credit the creator or source of this model" /></label><input className={CARD_INPUT} value={p.provenance.attribution_name} onChange={(e) => updatePossibleProvenance(p.key, 'attribution_name', e.target.value)} placeholder="Creator or organization" /></div>
                                 <div><label className={CARD_LABEL}>Attribution URL <InfoTooltip text="Link to the creator's page or original source" /></label><input className={CARD_INPUT} value={p.provenance.attribution_url} onChange={(e) => updatePossibleProvenance(p.key, 'attribution_url', e.target.value)} placeholder="https://..." /></div>
                               </div>
-                              <div><label className={CARD_LABEL}>Data provenance notes <InfoTooltip text="Additional context about training data or model origins" /></label><input className={CARD_INPUT} value={p.provenance.data_provenance_notes} onChange={(e) => updatePossibleProvenance(p.key, 'data_provenance_notes', e.target.value)} placeholder="Creator or organization" /></div>
                             </div>
                           )}
                         </div>
@@ -1481,11 +1414,12 @@ export default function WorkflowWizard() {
                         </div>
                         <div className="grid grid-cols-2 gap-4">
                           <div><label className={CARD_LABEL}>Download URL <InfoTooltip text="Where to download this model" /></label><input className={CARD_INPUT} value={p.provenance.download_url} onChange={(e) => updatePossibleProvenance(p.key, 'download_url', e.target.value)} placeholder="https://huggingface.co/..." /></div>
-                          <div><label className={CARD_LABEL}>License <InfoTooltip text="License governing use of this model" /></label><input className={CARD_INPUT} value={p.provenance.license} onChange={(e) => updatePossibleProvenance(p.key, 'license', e.target.value)} placeholder="e.g. Apache 2.0" /></div>
-                          <div><label className={CARD_LABEL}>Attribution <InfoTooltip text="Credit the creator or source of this model" /></label><input className={CARD_INPUT} value={p.provenance.attribution} onChange={(e) => updatePossibleProvenance(p.key, 'attribution', e.target.value)} placeholder="Creator or organization" /></div>
+                          <div><label className={CARD_LABEL}>Size (bytes) <InfoTooltip text="File size in bytes" /></label><input type="number" className={CARD_INPUT} value={p.provenance.size_bytes} onChange={(e) => updatePossibleProvenance(p.key, 'size_bytes', e.target.value)} placeholder="e.g. 7105348616" /></div>
+                          <div><label className={CARD_LABEL}>License ID <InfoTooltip text="License governing use of this model" /></label><input className={CARD_INPUT} value={p.provenance.license_id} onChange={(e) => updatePossibleProvenance(p.key, 'license_id', e.target.value)} placeholder="e.g. Apache 2.0" /></div>
+                          <div><label className={CARD_LABEL}>License URL <InfoTooltip text="Link to the license text" /></label><input className={CARD_INPUT} value={p.provenance.license_url} onChange={(e) => updatePossibleProvenance(p.key, 'license_url', e.target.value)} placeholder="https://..." /></div>
+                          <div><label className={CARD_LABEL}>Attribution <InfoTooltip text="Credit the creator or source of this model" /></label><input className={CARD_INPUT} value={p.provenance.attribution_name} onChange={(e) => updatePossibleProvenance(p.key, 'attribution_name', e.target.value)} placeholder="Creator or organization" /></div>
                           <div><label className={CARD_LABEL}>Attribution URL <InfoTooltip text="Link to the creator's page or original source" /></label><input className={CARD_INPUT} value={p.provenance.attribution_url} onChange={(e) => updatePossibleProvenance(p.key, 'attribution_url', e.target.value)} placeholder="https://..." /></div>
                         </div>
-                        <div><label className={CARD_LABEL}>Data provenance notes <InfoTooltip text="Additional context about training data or model origins" /></label><input className={CARD_INPUT} value={p.provenance.data_provenance_notes} onChange={(e) => updatePossibleProvenance(p.key, 'data_provenance_notes', e.target.value)} placeholder="Creator or organization" /></div>
                       </div>
                     )}
                   </div>

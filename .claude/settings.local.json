@@ -15,7 +15,20 @@
       "Bash(git commit -m 'Auto-fit lineage graph on first load of provenance tab *)",
       "Bash(git push *)",
       "Bash(git checkout *)",
-      "Bash(git pull *)"
+      "Bash(git pull *)",
+      "Bash(mkdir -p \"/Users/ednaho/pseudorandom-provenance/app/models/[...id]\")",
+      "Bash(npx eslint *)",
+      "Bash(grep -rn \"models/.*edit\\\\|/edit\\\\`\" /Users/ednaho/pseudorandom-provenance/app /Users/ednaho/pseudorandom-provenance/components)",
+      "Bash(git rm *)",
+      "Bash(rm -rf \"/Users/ednaho/pseudorandom-provenance/app/models/[...id]/edit\")",
+      "Bash(curl -sI \"https://huggingface.co/pseudotools/pseudocomfy-models/resolve/main/checkpoints/Juggernaut_X_RunDiffusion_Hyper.safetensors?download=true\")",
+      "Bash(curl -sL \"https://huggingface.co/pseudotools/checkpoint-juggernaut-x-hyper/raw/main/README.md\")",
+      "Bash(echo \"EXIT:$?\")",
+      "Bash(git stash *)",
+      "Bash(xargs -I{} echo {})",
+      "Bash(grep -n \"source: 'none', data: {}\" \"/Users/ednaho/pseudorandom-provenance/app/image-info/ImageInfoViewer.tsx\")",
+      "WebSearch",
+      "Bash(grep -rn \"api/models/\\\\${\" app/ components/ utils/)"
     ]
   }
 }

@@ -1,61 +1,40 @@
 import ModelsList from '@/components/models/ModelsList';
-import { MODEL_CATEGORIES } from '@/types/database';
-import { isInternalUser } from '@/utils/auth';
-import { createClient } from '@/utils/supabase/server';
+import {
+  CATEGORY_LABELS,
+  RECOGNIZED_CATEGORIES,
+  REVIEW_STATUS_META,
+  REVIEW_STATUS_VALUES,
+  listModelRepos,
+  fetchModelCard,
+} from '@/lib/modelCards';
 
 interface SearchParams {
   category?: string;
-  status?: string;
-  sort?: string;
+  risk?: string;
 }
 
-const VETTING_STATUSES = ['vetted', 'potentially_problematic', 'unknown'] as const;
-
-const CATEGORY_LABELS: Record<string, string> = {
-  checkpoints: 'Checkpoint',
-  controlnet: 'ControlNet',
-  loras: 'LoRA',
-  clip_vision: 'Clip Vision',
-  ipadapter: 'IPAdapter',
-};
-
-const STATUS_LABELS: Record<string, string> = {
-  vetted: 'Vetted',
-  potentially_problematic: 'Potentially Problematic',
-  unknown: 'Unknown',
-};
+const RISK_OPTIONS = REVIEW_STATUS_VALUES.map((value) => ({
+  value,
+  label: REVIEW_STATUS_META[value].label,
+}));
 
 export default async function ModelsPage({
   searchParams,
 }: {
   searchParams: Promise<SearchParams>;
 }) {
-  const supabase = await createClient();
-  const { category, status, sort } = await searchParams;
-
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  const internal = isInternalUser(user?.email);
-
+  const { category, risk } = await searchParams;
   const selectedCategories = category ? category.split(',').filter(Boolean) : [];
-  const selectedStatuses = status ? status.split(',').filter(Boolean) : [];
-  const sortDesc = sort === 'desc';
+  const selectedRisks = risk ? risk.split(',').filter(Boolean) : [];
 
-  const [{ count: totalCount }, { data: models, error }] = await Promise.all([
-    supabase.from('models').select('*', { count: 'exact', head: true }),
-    (() => {
-      let q = supabase
-        .from('models')
-        .select(
-          'id,category_id,name,file_name,download_url,attribution,attribution_url,license,data_provenance_notes,size_bytes,vetting_status_id,used_by_workflows,created_at,updated_at,model_categories!inner(name),vetting_statuses!inner(name)'
-        )
-        .order('name', { ascending: !sortDesc });
-      if (selectedCategories.length > 0) q = q.in('model_categories.name', selectedCategories);
-      if (selectedStatuses.length > 0) q = q.in('vetting_statuses.name', selectedStatuses);
-      return q;
-    })(),
-  ]);
+  // Only ~19 repos exist right now, so fetching each one's full card here
+  // (rather than just the cheap list) is fine — this is an occasionally-
+  // loaded admin page, not the fast/frequent path the wizard-facing list
+  // endpoint has to stay cheap for. Revisit if the catalog grows large
+  // enough to make this slow.
+  const repos = await listModelRepos();
+  const records = await Promise.all(repos.map((r) => fetchModelCard(r.record_id)));
+  const models = records.filter((m): m is NonNullable<typeof m> => m !== null);
 
   return (
     <div className="px-6 pt-10 pb-6">
@@ -69,22 +48,13 @@ export default async function ModelsPage({
         </p>
       </div>
 
-      {/* Error */}
-      {error && (
-        <div className="border border-red-200 bg-red-50 text-red-700 text-[13px] px-4 py-3 rounded-[8px] mb-6">
-          Failed to load models: {error.message}
-        </div>
-      )}
-
-      {/* Table with client-side search */}
       <ModelsList
-        models={(models ?? []) as any}
-        totalCount={totalCount ?? 0}
+        models={models}
+        totalCount={models.length}
         selectedCategories={selectedCategories}
-        selectedStatuses={selectedStatuses}
-        categoryOptions={MODEL_CATEGORIES.map((c) => ({ value: c, label: CATEGORY_LABELS[c] ?? c }))}
-        statusOptions={VETTING_STATUSES.map((s) => ({ value: s, label: STATUS_LABELS[s] ?? s }))}
-        internal={internal}
+        selectedRisks={selectedRisks}
+        categoryOptions={RECOGNIZED_CATEGORIES.map((c) => ({ value: c, label: CATEGORY_LABELS[c] ?? c }))}
+        riskOptions={RISK_OPTIONS}
       />
     </div>
   );
