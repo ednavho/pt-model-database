@@ -152,7 +152,7 @@ function boundsForce(
     const { w, h, minX = 0, minY = 0 } = getBounds();
     for (const n of nodes) {
       const r = radiusFn(n) + 4;
-      const soft = 70;
+      const soft = 130;
       if (n.fx == null) {
         const gaps = [
           (n.x! - minX) - r,
@@ -160,13 +160,13 @@ function boundsForce(
           (n.y! - minY) - r,
           (minY + h) - r - n.y!,
         ];
-        if (gaps[0] < soft) n.vx = (n.vx ?? 0) + (soft - gaps[0]) * 0.004;
-        if (gaps[1] < soft) n.vx = (n.vx ?? 0) - (soft - gaps[1]) * 0.004;
-        if (gaps[2] < soft) n.vy = (n.vy ?? 0) + (soft - gaps[2]) * 0.004;
-        if (gaps[3] < soft) n.vy = (n.vy ?? 0) - (soft - gaps[3]) * 0.004;
+        if (gaps[0] < soft) n.vx = (n.vx ?? 0) + (soft - gaps[0]) * 0.0018;
+        if (gaps[1] < soft) n.vx = (n.vx ?? 0) - (soft - gaps[1]) * 0.0018;
+        if (gaps[2] < soft) n.vy = (n.vy ?? 0) + (soft - gaps[2]) * 0.0018;
+        if (gaps[3] < soft) n.vy = (n.vy ?? 0) - (soft - gaps[3]) * 0.0018;
         // Hard stop only far outside the frame — a safety net, not a boundary.
-        n.x = Math.max(minX - r * 3, Math.min(minX + w + r * 3, n.x!));
-        n.y = Math.max(minY - r * 3, Math.min(minY + h + r * 3, n.y!));
+        n.x = Math.max(minX - r * 6, Math.min(minX + w + r * 6, n.x!));
+        n.y = Math.max(minY - r * 6, Math.min(minY + h + r * 6, n.y!));
       } else {
         n.fx = Math.max(minX + r, Math.min(minX + w - r, n.fx ?? 0));
         n.fy = Math.max(minY + r, Math.min(minY + h - r, n.fy ?? 0));
@@ -188,7 +188,7 @@ function popupHtml(node: LineageNode): string {
 
   const badge =
     node.verified === false
-      ? '<span style="margin-left:6px;font-size:10px;font-weight:400;color:#b45309;border:1px dashed #f59e0b;border-radius:3px;padding:0 4px">unverified</span>'
+      ? '<span style="margin-left:4px;font-size:8px;font-weight:400;color:#b45309;border:1px dashed #f59e0b;border-radius:3px;padding:0 3px">unverified</span>'
       : '';
 
   const allLinks = [
@@ -196,32 +196,35 @@ function popupHtml(node: LineageNode): string {
     ...(node.source ? [{ label: 'Source', url: node.source }] : []),
   ];
 
+  // Underlined, with a trailing arrow glyph — same affordance as the
+  // "Download"/"Attribution URL"/etc. links on the model provenance cards,
+  // so both places signal "this opens something" the same way.
   const linksHtml =
     allLinks.length > 0
-      ? `<div style="margin-top:10px;padding-top:8px;border-top:1px solid #e4e4e7;display:flex;flex-wrap:wrap;gap:5px 10px">
+      ? `<div style="margin-top:6px;padding-top:5px;border-top:1px solid #e4e4e7;display:flex;flex-wrap:wrap;gap:4px 8px">
           ${allLinks
             .map(
               (l) =>
-                `<a href="${l.url}" target="_blank" rel="noopener noreferrer" style="color:#71717a;text-decoration:none;font-weight:400;font-size:12px">${l.label}</a>`
+                `<a href="${l.url}" target="_blank" rel="noopener noreferrer" style="color:#71717a;text-decoration:underline;text-underline-offset:2px;font-weight:400;font-size:10px">${l.label} <span style="display:inline-block">↗</span></a>`
             )
             .join('')}
         </div>`
       : '';
 
   const dateLine = node.date
-    ? `<div style="font-size:12px;font-weight:400;color:#71717a;margin-bottom:6px">${node.date}</div>`
+    ? `<div style="font-size:9px;font-weight:400;color:#71717a;margin-bottom:4px">${node.date}</div>`
     : '';
 
   return `
     <div style="font-family:ui-sans-serif,system-ui,sans-serif;font-weight:400">
-      <div style="display:flex;align-items:center;gap:6px;margin-bottom:4px">
-        <span style="width:8px;height:8px;border-radius:9999px;background:${color};display:inline-block;flex-shrink:0"></span>
-        <span style="font-size:14px;font-weight:600;color:#18181b">${node.label}</span>
+      <div style="display:flex;align-items:center;gap:4px;margin-bottom:3px">
+        <span style="width:6px;height:6px;border-radius:9999px;background:${color};display:inline-block;flex-shrink:0"></span>
+        <span style="font-size:11px;font-weight:600;color:#18181b">${node.label}</span>
         ${badge}
       </div>
       ${dateLine}
-      <p style="margin:0;font-size:13px;font-weight:400;line-height:1.5;color:#3f3f46">${desc}</p>
-      <div id="lg-usage" style="margin-top:10px;font-size:13px;font-weight:400;line-height:1.6;color:#3f3f46"></div>
+      <p style="margin:0;font-size:10px;font-weight:400;line-height:1.4;color:#3f3f46">${desc}</p>
+      <div id="lg-usage" style="margin-top:6px;font-size:10px;font-weight:400;line-height:1.4;color:#3f3f46"></div>
       ${linksHtml}
     </div>`;
 }
@@ -253,6 +256,12 @@ export default function LineageGraph({
   const svgRef = useRef<SVGSVGElement>(null);
 
   const posRef = useRef(new Map<string, { x: number; y: number }>());
+  /** Which node ids were on screen after the previous draw — the baseline
+   *  playNodeTransition() diffs against to tell entering/continuing/exiting
+   *  nodes apart. Persists positions even for now-hidden nodes (posRef is
+   *  never pruned), so a node that reappears later glides back in from
+   *  wherever it last was instead of fading in from nothing. */
+  const lastVisibleIdsRef = useRef<Set<string>>(new Set());
   const zoomRef = useRef<d3.ZoomTransform>(d3.zoomIdentity);
   const hasFittedRef = useRef(false);
   const selectedRef = useRef<string | null>(null);
@@ -303,13 +312,26 @@ export default function LineageGraph({
       let yearXByYear = new Map<number, number>();
       let yearStripLayer: d3.Selection<SVGGElement, unknown, null, undefined> | null = null;
 
-      // Constrained to the fixed graph frame, independent of zoom — if this
-      // scaled with the zoom transform, zooming in would shrink the "in
-      // bounds" area and yank nodes back toward center. Zooming in should let
-      // nodes go past the frame edge, not fight the user for space.
-      const zoomBounds = () => ({ w: width, h: height, minX: 0, minY: 0 });
+      // Never shrinks below the raw frame size — zooming in should let nodes
+      // go past the frame edge, not fight the user for space (shrinking here
+      // would yank nodes back toward center as soon as they zoomed in). But
+      // it does grow when zoomed OUT: at k<1, more simulation-space is
+      // visible on screen than the raw width/height covers, so leaving the
+      // box pinned to the raw size left nodes hitting an invisible wall well
+      // inside the visibly-empty space the zoom-out just revealed. Reading
+      // zoomRef live (not just at force-setup time) means this responds to
+      // the user's zoom gesture as it happens, not just the fitted scale.
+      const zoomBounds = () => {
+        const k = Math.min(1, zoomRef.current.k);
+        const w = width / k;
+        const h = height / k;
+        return { w, h, minX: (width - w) / 2, minY: (height - h) / 2 };
+      };
 
       const visible = computeVisible(index, expanded, rootId);
+      // Snapshot before this draw overwrites it below — the "before" side of
+      // the entering/continuing/exiting diff playNodeTransition() runs.
+      const previousVisible = lastVisibleIdsRef.current;
       const depth = depthsFrom(index, visible, rootId);
       const maxDepth = Math.max(1, ...depth.values());
 
@@ -508,7 +530,12 @@ export default function LineageGraph({
         .attr('cursor', 'pointer')
         .on('click', (event, d) => {
           event.stopPropagation();
-          scheduleHide();
+          // Expanding/collapsing is a decisive action, not a hover-away —
+          // dismiss immediately rather than waiting out the hover-grace
+          // delay scheduleHide() uses for "moving toward the card" hovers.
+          cancelHide();
+          selectedRef.current = null;
+          updatePopup();
           onToggleRef.current(d.id);
         })
         .on('mouseenter', (_event, d) => {
@@ -627,8 +654,8 @@ export default function LineageGraph({
         .attr('pointer-events', 'none');
 
       // ── Popup (lives on SVG directly so it's in viewport space, not zoom space) ──
-      const CARD_W = 224;
-      const CARD_H = 220;
+      const CARD_W = 252;
+      const CARD_H = 110;
       const popup = svg
         .append('foreignObject')
         .attr('width', CARD_W + 16)
@@ -642,7 +669,7 @@ export default function LineageGraph({
         .style('border', '1px solid #e4e4e7')
         .style('border-radius', '4px')
         .style('box-shadow', '0 4px 16px rgba(0,0,0,.10)')
-        .style('padding', '10px 12px')
+        .style('padding', '6px 8px')
         .style('width', `${CARD_W}px`)
         .style('pointer-events', 'all')
         .style('cursor', 'default')
@@ -835,63 +862,29 @@ export default function LineageGraph({
       // Run the simulation to completion synchronously before the first paint,
       // instead of letting it settle over ~3-4s of async (rAF-driven) ticks.
       // alphaDecay 0.03 from alpha 0.7 needs ~215 ticks to cross the default
-      // alphaMin — 250 covers that with margin. This is what lets fitToView()
-      // (called right below) frame the *actual* settled layout immediately;
-      // fitting against an early, not-yet-spread-out layout means later ticks
-      // push nodes past whatever frame was already locked in, since the fit
-      // only runs once. Cheap for a graph this size (low tens of ms).
+      // alphaMin — 250 covers that with margin. This is what lets playEntrance()
+      // (called right below) frame and animate toward the *actual* settled
+      // layout immediately; fitting against an early, not-yet-spread-out
+      // layout means later ticks push nodes past whatever frame was already
+      // locked in, since the fit only runs once. Cheap for a graph this size
+      // (low tens of ms).
       for (let i = 0; i < 250; i++) sim.tick();
+      // alpha is already far below alphaMin at this point, so the
+      // simulation's own auto-run loop would stop itself within another
+      // tick or two regardless — stopping it explicitly here just makes
+      // that deterministic instead of racing it. Both playEntrance() and
+      // playNodeTransition() drive position/opacity by hand afterward; a
+      // stray auto-continued tick calling paintTick() mid-transition would
+      // stomp the transform/opacity they're animating and cancel it outright
+      // (a new .attr() call interrupts a running D3 transition on the same
+      // attribute). Drag explicitly restarts the sim itself when needed.
+      sim.stop();
       doFit();
 
-      // Frames the settled layout computed by the head-start above.
-      // hasFittedRef persists across redraws caused by ResizeObserver so the
-      // fit fires exactly once per data/layout change (hasFittedRef is reset in
-      // the useEffect below when the draw callback reference changes).
-      function fitToView() {
-        let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
-        for (const n of nodes) {
-          const r = radius(n) + 4;
-          minX = Math.min(minX, (n.x ?? 0) - r);
-          maxX = Math.max(maxX, (n.x ?? 0) + r);
-          minY = Math.min(minY, (n.y ?? 0) - r);
-          maxY = Math.max(maxY, (n.y ?? 0) + r);
-        }
-        if (!isFinite(minX)) return;
-        const pad = 24;
-        const gW = maxX - minX + pad * 2;
-        const gH = maxY - minY + pad * 2;
-        const k = Math.min(width / gW, height / gH, 1);
-        const tx = (width - (maxX + minX) * k) / 2;
-        const ty = (height - (maxY + minY) * k) / 2;
-        const target = d3.zoomIdentity.translate(tx, ty).scale(k);
-        // Ease into the fitted view rather than snapping. Driven by a plain
-        // d3.timer (not svg.transition().call(zoom.transform, …)) — the zoom
-        // behaviour gets torn down and rebuilt on every redraw (ResizeObserver
-        // fires several times right after mount), and a zoom-driven transition
-        // started by one redraw silently stalls once a later redraw replaces
-        // the zoom behaviour it depends on. Tweening the transform by hand
-        // sidesteps that entirely.
-        const start = zoomRef.current;
-        const duration = 700;
-        fitAnimTimer?.stop();
-        fitAnimTimer = d3.timer((elapsed) => {
-          const p = Math.min(1, elapsed / duration);
-          const e = d3.easeCubicOut(p);
-          const cur = d3.zoomIdentity
-            .translate(start.x + (target.x - start.x) * e, start.y + (target.y - start.y) * e)
-            .scale(start.k + (target.k - start.k) * e);
-          zoomRef.current = cur;
-          root.attr('transform', cur.toString());
-          if (p >= 1) {
-            // Keep the zoom behaviour's own bookkeeping in sync so the next
-            // user-driven pan/zoom gesture continues smoothly from here.
-            svg.property('__zoom', cur);
-            fitAnimTimer?.stop();
-          }
-        });
-      }
-
-      sim.on('tick', () => {
+      // Redraws everything from current node positions — shared by the live
+      // simulation's own tick loop and by playEntrance()'s hand-rolled tween
+      // below, so both paint through the exact same code path.
+      function paintTick() {
         link
           .attr('x1', (d) => (d.source as SimNode).x!)
           .attr('y1', (d) => (d.source as SimNode).y!)
@@ -921,13 +914,217 @@ export default function LineageGraph({
 
         for (const n of nodes) posRef.current.set(n.id, { x: n.x!, y: n.y! });
         updatePopup();
-      });
+      }
+
+      // Plays the arrival animation once per data/layout change (gated by
+      // hasFittedRef, same one-shot rule as the old fitToView). Two things
+      // ease in together, on one shared timer: the camera starts visibly
+      // zoomed out and glides in to the fitted view, and every node starts
+      // offset from its already-settled position (computed by the head-start
+      // ticks above) and drifts softly into place — a "floating down" feel
+      // rather than the previous snap-straight-to-final. Driven by a plain
+      // d3.timer (not svg.transition().call(zoom.transform, …)) — the zoom
+      // behaviour gets torn down and rebuilt on every redraw (ResizeObserver
+      // fires several times right after mount), and a zoom-driven transition
+      // started by one redraw silently stalls once a later redraw replaces
+      // the zoom behaviour it depends on. Tweening by hand sidesteps that.
+      function playEntrance() {
+        let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+        for (const n of nodes) {
+          const r = radius(n) + 4;
+          minX = Math.min(minX, (n.x ?? 0) - r);
+          maxX = Math.max(maxX, (n.x ?? 0) + r);
+          minY = Math.min(minY, (n.y ?? 0) - r);
+          maxY = Math.max(maxY, (n.y ?? 0) + r);
+        }
+        if (!isFinite(minX)) return;
+        const pad = 24;
+        const gW = maxX - minX + pad * 2;
+        const gH = maxY - minY + pad * 2;
+        const fittedK = Math.min(width / gW, height / gH, 1);
+        const fittedTx = (width - (maxX + minX) * fittedK) / 2;
+        const fittedTy = (height - (maxY + minY) * fittedK) / 2;
+        const target = d3.zoomIdentity.translate(fittedTx, fittedTy).scale(fittedK);
+
+        // Every node's start position is its settled spot pushed outward from
+        // the layout's centroid and up slightly — so the whole cluster reads
+        // as drifting inward and settling down, not radiating from a point.
+        const finalPos = new Map(nodes.map((n) => [n.id, { x: n.x!, y: n.y! }] as const));
+        const centroidX = d3.mean(nodes, (n) => finalPos.get(n.id)!.x) ?? width / 2;
+        const centroidY = d3.mean(nodes, (n) => finalPos.get(n.id)!.y) ?? height / 2;
+        const startPos = new Map(
+          nodes.map((n) => {
+            const f = finalPos.get(n.id)!;
+            return [n.id, { x: f.x + (f.x - centroidX) * 0.3, y: f.y + (f.y - centroidY) * 0.3 - 16 }] as const;
+          })
+        );
+
+        // Camera starts noticeably wider than the fitted view — fit and
+        // centred on the *displaced* start positions directly, not derived
+        // from the target's anchor point. Anchoring on the target's point
+        // would keep a single simulation-space point screen-centred, but
+        // the displaced cluster's own visual mass wouldn't actually sit in
+        // the middle of the frame at t=0, since it isn't centred on that
+        // point yet — this fits the same way fitToView does, just against
+        // startPos instead of the settled layout, so both ends of the tween
+        // are independently, correctly centred.
+        let sMinX = Infinity, sMaxX = -Infinity, sMinY = Infinity, sMaxY = -Infinity;
+        for (const n of nodes) {
+          const s = startPos.get(n.id)!;
+          const r = radius(n) + 4;
+          sMinX = Math.min(sMinX, s.x - r);
+          sMaxX = Math.max(sMaxX, s.x + r);
+          sMinY = Math.min(sMinY, s.y - r);
+          sMaxY = Math.max(sMaxY, s.y + r);
+        }
+        const zoomOutK = fittedK * 0.6;
+        const startTx = width / 2 - ((sMinX + sMaxX) / 2) * zoomOutK;
+        const startTy = height / 2 - ((sMinY + sMaxY) / 2) * zoomOutK;
+        const start = d3.zoomIdentity.translate(startTx, startTy).scale(zoomOutK);
+
+        // Pin every node for the duration so the still-settling simulation
+        // (alpha is tiny but not exactly zero) can't fight the tween.
+        for (const n of nodes) {
+          const s = startPos.get(n.id)!;
+          n.x = n.fx = s.x;
+          n.y = n.fy = s.y;
+        }
+        zoomRef.current = start;
+        root.attr('transform', start.toString());
+        paintTick();
+
+        const duration = 900;
+        fitAnimTimer?.stop();
+        fitAnimTimer = d3.timer((elapsed) => {
+          const p = Math.min(1, elapsed / duration);
+          const e = d3.easeCubicOut(p);
+
+          const cur = d3.zoomIdentity
+            .translate(start.x + (target.x - start.x) * e, start.y + (target.y - start.y) * e)
+            .scale(start.k + (target.k - start.k) * e);
+          zoomRef.current = cur;
+          root.attr('transform', cur.toString());
+
+          for (const n of nodes) {
+            const s = startPos.get(n.id)!;
+            const f = finalPos.get(n.id)!;
+            n.x = n.fx = s.x + (f.x - s.x) * e;
+            n.y = n.fy = s.y + (f.y - s.y) * e;
+          }
+          paintTick();
+
+          if (p >= 1) {
+            // Directed layouts keep the render pinned; everything else
+            // releases back to the live simulation, same rule as drag-end.
+            for (const n of nodes) {
+              if (!(n.id === rootId && layout !== 'force')) {
+                n.fx = null;
+                n.fy = null;
+              }
+            }
+            // Keep the zoom behaviour's own bookkeeping in sync so the next
+            // user-driven pan/zoom gesture continues smoothly from here.
+            svg.property('__zoom', cur);
+            fitAnimTimer?.stop();
+          }
+        });
+      }
+
+      sim.on('tick', paintTick);
+
+      /**
+       * The non-first-fit counterpart to playEntrance() — runs for every
+       * later redraw (expand/collapse, layout switch, or the container
+       * resizing e.g. inline → "click to expand"), so it's what gives those
+       * a satisfying settle instead of the previous instant snap. No camera
+       * movement here on purpose — the whole-graph zoom/float choreography
+       * is reserved for playEntrance() (a genuinely new graph); this only
+       * ever moves nodes/links, keeping the current pan/zoom untouched so
+       * expanding one node doesn't yank the view around.
+       *
+       * Nodes are classified against previousVisible: continuing nodes glide
+       * from their last known position (posRef) to the new one; newly
+       * revealed nodes fade+scale in at their final spot; nodes that just
+       * left the visible set don't just vanish — a brief fading "ghost" at
+       * their last position acknowledges the removal instead of cutting it
+       * abruptly. Links glide along with whichever endpoint moved.
+       */
+      function playNodeTransition() {
+        const duration = 520;
+        // A soft spring, not a plain deceleration — overshoots the target
+        // slightly then settles back, which is what actually reads as
+        // "popping out gently" rather than just easing to a stop. 1.4 is a
+        // notch below d3's default overshoot (~1.7) to keep it gentle
+        // rather than bouncy.
+        const spring = d3.easeBackOut.overshoot(1.4);
+
+        node
+          .attr('transform', (d) => {
+            const prev = previousVisible.has(d.id) ? posRef.current.get(d.id) : null;
+            return prev ? `translate(${prev.x},${prev.y}) scale(1)` : `translate(${d.x},${d.y}) scale(0.4)`;
+          })
+          .attr('opacity', (d) => (previousVisible.has(d.id) ? 1 : 0))
+          .transition()
+          .duration(duration)
+          .ease(spring)
+          .attr('transform', (d) => `translate(${d.x},${d.y}) scale(1)`)
+          .attr('opacity', 1);
+
+        const idOf = (end: SimNode | string) => (typeof end === 'string' ? end : end.id);
+        const finalPosOf = (end: SimNode | string) => {
+          const n = typeof end === 'string' ? nodes.find((x) => x.id === end) : end;
+          return { x: n?.x ?? width / 2, y: n?.y ?? height / 2 };
+        };
+        const priorPosOf = (end: SimNode | string) => {
+          const id = idOf(end);
+          return previousVisible.has(id) ? posRef.current.get(id) ?? null : null;
+        };
+
+        link
+          .attr('x1', (d) => priorPosOf(d.source as SimNode)?.x ?? finalPosOf(d.source as SimNode).x)
+          .attr('y1', (d) => priorPosOf(d.source as SimNode)?.y ?? finalPosOf(d.source as SimNode).y)
+          .attr('x2', (d) => priorPosOf(d.target as SimNode)?.x ?? finalPosOf(d.target as SimNode).x)
+          .attr('y2', (d) => priorPosOf(d.target as SimNode)?.y ?? finalPosOf(d.target as SimNode).y)
+          .attr('opacity', (d) =>
+            previousVisible.has(idOf(d.source as SimNode)) && previousVisible.has(idOf(d.target as SimNode)) ? 1 : 0
+          )
+          .transition()
+          .duration(duration)
+          .ease(spring)
+          .attr('x1', (d) => finalPosOf(d.source as SimNode).x)
+          .attr('y1', (d) => finalPosOf(d.source as SimNode).y)
+          .attr('x2', (d) => finalPosOf(d.target as SimNode).x)
+          .attr('y2', (d) => finalPosOf(d.target as SimNode).y)
+          .attr('opacity', 1);
+
+        const exitingIds = [...previousVisible].filter((id) => !visible.has(id));
+        if (exitingIds.length > 0) {
+          const ghosts = root
+            .append('g')
+            .attr('pointer-events', 'none')
+            .selectAll('circle')
+            .data(exitingIds)
+            .join('circle')
+            .attr('cx', (id) => posRef.current.get(id)?.x ?? width / 2)
+            .attr('cy', (id) => posRef.current.get(id)?.y ?? height / 2)
+            .attr('r', (id) => {
+              const meta = index.nodeById.get(id);
+              return meta ? radius({ ...meta } as SimNode) + 4 : 10;
+            })
+            .attr('fill', (id) => TYPE_COLORS[index.nodeById.get(id)?.type ?? 'model'])
+            .attr('opacity', 0.85);
+          ghosts.transition().duration(duration).ease(d3.easeCubicIn).attr('opacity', 0).attr('r', 2).remove();
+        }
+      }
 
       function doFit() {
         if (!hasFittedRef.current) {
           hasFittedRef.current = true;
-          fitToView();
+          playEntrance();
+        } else {
+          playNodeTransition();
         }
+        lastVisibleIdsRef.current = new Set(visible);
       }
 
       updatePopup();
@@ -959,23 +1156,45 @@ export default function LineageGraph({
     [index, allLinks, expanded, rootId, layout, imageUrl, imageDimensions, showLinkLabels, linkPhrase]
   );
 
+  // Deliberately narrower than draw's own dependency list: this only fires
+  // for a genuinely new graph (new data, or a new root to focus on) — not
+  // for expand/collapse clicks or a layout switch, which still need draw()
+  // to re-run (registered separately below) but shouldn't replay the
+  // entrance animation or reset the camera. Runs before the render effect
+  // below (declaration order), so hasFittedRef is already false by the time
+  // that effect's draw() call checks it.
   useEffect(() => {
-    // Reset fit and zoom whenever data/layout changes so each new graph starts
-    // from a clean slate (prevents stale zoom accumulating across HMR reloads
-    // or layout switches).
     hasFittedRef.current = false;
     zoomRef.current = d3.zoomIdentity;
+  }, [index, rootId, imageUrl]);
 
+  useEffect(() => {
     const host = hostRef.current;
     if (!host) return;
     let stop: (() => void) | undefined;
-    const render = () => {
+    // ResizeObserver is guaranteed to fire once immediately after observe()
+    // with whatever size the element already is — same size the synchronous
+    // render() below just drew at. Without this guard that phantom callback
+    // wipes the SVG a moment later and restarts draw(), which stops the
+    // in-flight entrance timer and orphans it (hasFittedRef is already true
+    // by then, so playEntrance() never replays) — the animation was getting
+    // cancelled before a single frame of it could be seen. Only redraw on a
+    // size that's actually different from the one already drawn.
+    let lastW = -1;
+    let lastH = -1;
+    const render = (width: number, height: number) => {
+      if (width === lastW && height === lastH) return;
+      lastW = width;
+      lastH = height;
       stop?.();
-      const { width, height } = host.getBoundingClientRect();
       stop = draw(width, height);
     };
-    render();
-    const ro = new ResizeObserver(render);
+    const initial = host.getBoundingClientRect();
+    render(initial.width, initial.height);
+    const ro = new ResizeObserver(() => {
+      const { width, height } = host.getBoundingClientRect();
+      render(width, height);
+    });
     ro.observe(host);
     return () => {
       ro.disconnect();

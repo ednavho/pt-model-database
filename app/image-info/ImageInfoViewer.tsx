@@ -6,7 +6,7 @@ import { MODEL_FILE_TO_NODE, lineageLinks, lineageNodes, type LineageLink, type 
 import { EMPTY_PROVENANCE, computeReviewStatus, type ModelProvenance, type ReviewStatus } from '@/lib/modelCards';
 import type { VettingStatus } from '@/types/database';
 import { cn } from '@/utils/cn';
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import LineageGraph, { LayoutMode, buildIndex, computeVisible } from '../lineage-sketch/LineageGraph';
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -465,6 +465,7 @@ export default function ImageInfoViewer() {
 
   const [graphLayout, setGraphLayout] = useState<LayoutMode>('force');
   const [showLayoutMenu, setShowLayoutMenu] = useState(false);
+  const [zoomed, setZoomed] = useState(false);
   const [lineageOpen, setLineageOpen] = useState(true);
   const [provenanceOpen, setProvenanceOpen] = useState(true);
   const [extraNodes, setExtraNodes] = useState<LineageNode[]>([]);
@@ -533,6 +534,13 @@ export default function ImageInfoViewer() {
 
   const graphNodes = useMemo(() => [...lineageNodes, ...extraNodes], [extraNodes]);
   const graphLinks = useMemo(() => [...lineageLinks, ...extraLinks], [extraLinks]);
+
+  useEffect(() => {
+    if (!zoomed) return;
+    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && setZoomed(false);
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [zoomed]);
 
   const hasImage = imageUrl !== null;
   const hasGraph = hasImage && result?.kind === 'ok' && extraNodes.length > 0;
@@ -664,51 +672,135 @@ export default function ImageInfoViewer() {
                     </button>
                     {lineageOpen && (
                       <>
-                        <div className="border border-[#E9E9E9] rounded-[8px] relative">
-                          {/* Floating view picker */}
-                          <div className="absolute top-3 right-3 z-10">
-                            <button
-                              onClick={() => setShowLayoutMenu((v) => !v)}
-                              className="flex items-center gap-1.5 bg-white border border-[#E9E9E9] rounded-[8px] px-3 py-1.5 text-[12px] hover:opacity-75 transition-opacity shadow-[0_0_4px_rgba(0,0,0,0.10)]"
-                            >
-                              <span className="text-[#939393]">View:</span>
-                              <span className="text-black">{LAYOUT_OPTIONS.find((o) => o.id === graphLayout)?.label}</span>
-                              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#939393" strokeWidth="2" strokeLinecap="round">
-                                <polyline points="6 9 12 15 18 9" />
-                              </svg>
-                            </button>
-                            {showLayoutMenu && (
-                              <>
-                                <div className="fixed inset-0 z-40" onClick={() => setShowLayoutMenu(false)} />
-                                <div className="absolute right-0 top-full mt-1 z-50 bg-white border border-[#E9E9E9] rounded-[8px] shadow-sm overflow-hidden min-w-[120px]">
-                                  {LAYOUT_OPTIONS.map((opt) => (
-                                    <button
-                                      key={opt.id}
-                                      onClick={() => { setGraphLayout(opt.id); setShowLayoutMenu(false); }}
-                                      className={cn('w-full text-left px-3 py-2 text-[12px] hover:bg-zinc-50 transition-colors', graphLayout === opt.id ? 'text-black font-medium' : 'text-[#939393]')}
-                                    >
-                                      {opt.label}
-                                    </button>
-                                  ))}
-                                </div>
-                              </>
+                        {/* Keyframes are always mounted (harmless when unused) rather than
+                            gated on `zoomed`, so this never inserts/removes a sibling ahead
+                            of the frame below — doing that would shift every later child's
+                            index and could make React remount the LineageGraph subtree
+                            instead of preserving it (and its settled layout) across the
+                            zoom toggle. */}
+                        <style>{`
+                          @keyframes lineage-fade { from { opacity: 0 } to { opacity: 1 } }
+                          @keyframes lineage-rise { from { opacity: 0; transform: scale(.975) } to { opacity: 1; transform: none } }
+                          @media (prefers-reduced-motion: reduce) {
+                            [style*="lineage-"] { animation: none !important }
+                          }
+                        `}</style>
+                        <div
+                          className={zoomed ? 'fixed inset-0 z-50 flex items-center justify-center bg-white/50 p-6 backdrop-blur-sm' : ''}
+                          style={zoomed ? { animation: 'lineage-fade 180ms ease-out' } : undefined}
+                          onClick={zoomed ? () => setZoomed(false) : undefined}
+                        >
+                          {/* One LineageGraph instance total — its internal simulation state
+                              (settled positions, zoom, expand/collapse) lives in refs keyed to
+                              this component instance. Swapping to a second instance in the
+                              zoomed modal (as an earlier version did) meant a fresh simulation
+                              at a different pixel size, producing a visibly different layout
+                              and losing whatever was expanded. Keeping it the same element
+                              across the zoom toggle — only the wrapping classNames change —
+                              preserves all of that; the container resize even plays through
+                              playNodeTransition() in LineageGraph.tsx for a smooth reflow
+                              instead of a jump cut. */}
+                          <div
+                            onClick={zoomed ? (e) => e.stopPropagation() : undefined}
+                            style={zoomed ? { animation: 'lineage-rise 200ms ease-out' } : undefined}
+                            className={
+                              zoomed
+                                ? 'relative flex h-full w-full max-w-6xl flex-col rounded-sm border border-zinc-200 bg-white shadow-xl'
+                                : 'border border-[#E9E9E9] rounded-[8px] relative'
+                            }
+                          >
+                            <div className="relative min-h-0 flex-1">
+                              {/* Floating view picker */}
+                              <div className="absolute top-3 right-3 z-10">
+                                <button
+                                  onClick={() => setShowLayoutMenu((v) => !v)}
+                                  className="flex items-center gap-1.5 bg-white border border-[#E9E9E9] rounded-[8px] px-3 py-1.5 text-[12px] hover:opacity-75 transition-opacity shadow-[0_0_4px_rgba(0,0,0,0.10)]"
+                                >
+                                  <span className="text-[#939393]">View:</span>
+                                  <span className="text-black">{LAYOUT_OPTIONS.find((o) => o.id === graphLayout)?.label}</span>
+                                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#939393" strokeWidth="2" strokeLinecap="round">
+                                    <polyline points="6 9 12 15 18 9" />
+                                  </svg>
+                                </button>
+                                {showLayoutMenu && (
+                                  <>
+                                    <div className="fixed inset-0 z-40" onClick={() => setShowLayoutMenu(false)} />
+                                    <div className="absolute right-0 top-full mt-1 z-50 bg-white border border-[#E9E9E9] rounded-[8px] shadow-sm overflow-hidden min-w-[120px]">
+                                      {LAYOUT_OPTIONS.map((opt) => (
+                                        <button
+                                          key={opt.id}
+                                          onClick={() => { setGraphLayout(opt.id); setShowLayoutMenu(false); }}
+                                          className={cn('w-full text-left px-3 py-2 text-[12px] hover:bg-zinc-50 transition-colors', graphLayout === opt.id ? 'text-black font-medium' : 'text-[#939393]')}
+                                        >
+                                          {opt.label}
+                                        </button>
+                                      ))}
+                                    </div>
+                                  </>
+                                )}
+                              </div>
+                              <LineageGraph
+                                nodes={graphNodes}
+                                links={graphLinks}
+                                expanded={expanded}
+                                onToggle={handleToggle}
+                                rootId={DROPPED_ROOT}
+                                layout={graphLayout}
+                                imageUrl={imageUrl}
+                                showLinkLabels={zoomed}
+                                className={zoomed ? 'h-full w-full' : 'h-[420px]'}
+                              />
+                              {!zoomed && (
+                                <button
+                                  type="button"
+                                  onClick={() => setZoomed(true)}
+                                  className="absolute bottom-3 right-3 flex items-center gap-1.5 rounded-sm bg-white/80 px-2 py-1 text-xs text-zinc-500 backdrop-blur-sm transition-colors hover:text-zinc-900"
+                                >
+                                  <svg width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                                    <path
+                                      d="M6 2H2v4M10 14h4v-4M14 6V2h-4M2 10v4h4"
+                                      stroke="currentColor"
+                                      strokeWidth="1.4"
+                                      strokeLinecap="round"
+                                      strokeLinejoin="round"
+                                    />
+                                  </svg>
+                                  Click to expand
+                                </button>
+                              )}
+                            </div>
+                            {zoomed && (
+                              <div className="flex items-center gap-4 border-t border-zinc-100 px-4 py-3 shrink-0">
+                                <GraphLegend />
+                              </div>
+                            )}
+                            {zoomed && (
+                              <button
+                                type="button"
+                                onClick={() => setZoomed(false)}
+                                aria-label="Close"
+                                // Outside the frame entirely, not inset within it — right-4 (a
+                                // positive inset) landed the button on top of the view picker,
+                                // which lives in that same top-right corner of the graph area.
+                                // -right-12 pushes it 48px past the frame's own right edge,
+                                // i.e. 16px clear of the edge once the button's own 32px width
+                                // is accounted for (32 + 16 = 48) — same 16px gap, now measured
+                                // on the outside of the frame instead of the inside.
+                                className="absolute -right-12 top-4 flex h-8 w-8 items-center justify-center rounded-full border border-zinc-200 bg-white text-zinc-500 shadow-sm hover:text-zinc-900"
+                              >
+                                <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                                  <path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+                                </svg>
+                              </button>
                             )}
                           </div>
-                          <LineageGraph
-                            nodes={graphNodes}
-                            links={graphLinks}
-                            expanded={expanded}
-                            onToggle={handleToggle}
-                            rootId={DROPPED_ROOT}
-                            layout={graphLayout}
-                            imageUrl={imageUrl}
-                            className="h-[420px]"
-                          />
                         </div>
                         {/* Legend — outside the frame, 4px gap, 2px left padding */}
-                        <div className="mt-1 pl-0.5">
-                          <GraphLegend />
-                        </div>
+                        {!zoomed && (
+                          <div className="mt-1 pl-0.5">
+                            <GraphLegend />
+                          </div>
+                        )}
                       </>
                     )}
                   </div>
