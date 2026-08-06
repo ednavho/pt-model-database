@@ -1681,7 +1681,7 @@ export default function WorkflowWizard() {
         {/* Fixed nav button bar */}
         <div className="shrink-0 relative z-20 px-10 pt-4 pb-9 flex justify-between max-w-[800px]">
           {step === 'upload' ? (
-            <button disabled className="flex items-center justify-center px-5 py-[6px] gap-[10px] rounded-[8px] bg-white border border-black text-[13px] text-black cursor-default opacity-40">Back</button>
+            <button disabled className="flex items-center justify-center px-5 py-[6px] gap-[10px] rounded-[8px] bg-white border border-[#D4D4D4] text-[13px] text-[#B0B0B0] cursor-not-allowed">Back</button>
           ) : step === 'requirements' ? (
             <button onClick={() => setStep('upload')} className="flex items-center justify-center px-5 py-[6px] gap-[10px] rounded-[8px] bg-white border border-black text-[13px] text-black hover:bg-zinc-50 cursor-pointer transition-colors">Back</button>
           ) : step === 'possible-models' ? (
