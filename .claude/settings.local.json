@@ -29,7 +29,9 @@
       "Bash(grep -n \"source: 'none', data: {}\" \"/Users/ednaho/pseudorandom-provenance/app/image-info/ImageInfoViewer.tsx\")",
       "WebSearch",
       "Bash(grep -rn \"api/models/\\\\${\" app/ components/ utils/)",
-      "Bash(python3 -c \"import json; json.load\\(open\\('.claude/settings.local.json'\\)\\); print\\('valid json'\\)\")"
+      "Bash(python3 -c \"import json; json.load\\(open\\('.claude/settings.local.json'\\)\\); print\\('valid json'\\)\")",
+      "Bash(echo \"TSC_EXIT:$?\")",
+      "WebFetch(domain:pseudotools.github.io)"
     ]
   }
 }
