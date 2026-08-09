@@ -182,6 +182,8 @@ export default function LineageSketch() {
 
   const toggle = useCallback((id: string) => {
     setExpanded((prev) => {
+      const beforeVisible = computeVisible(indexRef.current, prev, rootIdRef.current);
+
       const next = new Set(prev);
       if (next.has(id)) {
         // Collapsing: remove this node and clean up nodes no longer reachable.
@@ -194,6 +196,16 @@ export default function LineageSketch() {
         // Expanding: just open this node — its direct neighbours become visible,
         // but their own children stay collapsed until the user clicks them.
         next.add(id);
+      }
+
+      // A leaf node — nothing reachable from it — toggling its own expanded
+      // flag doesn't change what's actually on screen. Returning the same
+      // Set reference tells React to bail out of this update entirely, so
+      // the graph doesn't redraw/re-simulate (and visibly jiggle) for a
+      // click that had nothing to expand or collapse.
+      const afterVisible = computeVisible(indexRef.current, next, rootIdRef.current);
+      if (beforeVisible.size === afterVisible.size && [...beforeVisible].every((v) => afterVisible.has(v))) {
+        return prev;
       }
       return next;
     });

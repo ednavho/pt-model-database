@@ -1,5 +1,6 @@
 'use client';
 
+import ModelProvenanceCard from '@/components/ui/ModelProvenanceCard';
 import RiskBadge from '@/components/ui/RiskBadge';
 import VettingBadge from '@/components/ui/VettingBadge';
 import { MODEL_FILE_TO_NODE, lineageLinks, lineageNodes, type LineageLink, type LineageNode } from '@/data/lineageData';
@@ -299,13 +300,6 @@ function fmt(value: number | null | undefined, decimals: number): string {
   return value.toFixed(decimals);
 }
 
-function formatBytes(bytes: number | null | undefined): string | null {
-  if (!bytes) return null;
-  const gb = bytes / 1_073_741_824;
-  if (gb >= 1) return `${gb.toFixed(1)} GB`;
-  return `${(bytes / 1_048_576).toFixed(0)} MB`;
-}
-
 function formatDate(date: Date): string {
   return date.toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' });
 }
@@ -390,64 +384,25 @@ const LAYOUT_OPTIONS: { id: LayoutMode; label: string }[] = [
 // ── Requirement card ──────────────────────────────────────────────────────────
 
 function RequirementCard({ req }: { req: Resolved }) {
-  const { data } = req;
-  const size = formatBytes(data.size_bytes);
   const isExtension = req.category === 'custom_nodes';
-
-  const rows: { label: string; value: React.ReactNode }[] = [];
-  if (req.category) rows.push({ label: 'Category', value: req.category });
-  if (data.attribution_name) rows.push({ label: 'Attribution', value: data.attribution_name });
-  if (data.attribution_url) rows.push({
-    label: 'Attribution URL',
-    value: <a href={data.attribution_url} target="_blank" rel="noopener noreferrer" className="text-black underline underline-offset-2 hover:opacity-60 break-all">{data.attribution_url} <span className="inline-block">↗</span></a>,
-  });
-  if (data.license_id || data.license_url) rows.push({
-    label: 'License',
-    value: data.license_url ? (
-      <a href={data.license_url} target="_blank" rel="noopener noreferrer" className="text-black underline underline-offset-2 hover:opacity-60 break-all">{data.license_id ?? data.license_url} <span className="inline-block">↗</span></a>
-    ) : data.license_id,
-  });
-  if (data.download_url) rows.push({
-    label: 'Download',
-    value: <a href={data.download_url} target="_blank" rel="noopener noreferrer" className="text-black underline underline-offset-2 hover:opacity-60 break-all">{data.download_url} <span className="inline-block">↗</span></a>,
-  });
-  if (size) rows.push({ label: 'Size', value: size });
-  if (data.reviewer) rows.push({ label: 'Reviewer', value: data.reviewer });
-  if (data.reviewed_at) rows.push({ label: 'Reviewed at', value: data.reviewed_at });
-  if (data.license_findings) rows.push({ label: 'License findings', value: data.license_findings });
-  if (data.evidence) rows.push({ label: 'Evidence', value: data.evidence });
-  if (data.rationale) rows.push({ label: 'Rationale', value: data.rationale });
+  const badge = !isExtension && req.status
+    ? <RiskBadge record={{ status: req.status }} />
+    : !isExtension && req.legacyVettingStatus
+      ? <VettingBadge status={req.legacyVettingStatus.toLowerCase() as VettingStatus} />
+      : null;
+  const emptyMessage = req.source === 'none'
+    ? `Nothing was recorded for this ${isExtension ? 'extension' : 'model'}${req.pointerBroken ? ', and the record it points to is no longer in the database.' : '.'}`
+    : null;
 
   return (
-    <div className="border border-[#E9E9E9] rounded-[8px] px-5 py-4">
-      <div className="flex items-start justify-between gap-3 mb-3">
-        <div className="min-w-0">
-          <p className="text-[15px] font-semibold text-black break-all">{req.name ?? req.requirement}</p>
-          {req.name && <p className="text-[12px] text-[#939393] font-mono break-all mt-0.5">{req.requirement}</p>}
-        </div>
-        <div className="flex items-center gap-2 shrink-0">
-          {!isExtension && req.status && <RiskBadge record={{ status: req.status }} />}
-          {!isExtension && !req.status && req.legacyVettingStatus && (
-            <VettingBadge status={req.legacyVettingStatus.toLowerCase() as VettingStatus} />
-          )}
-        </div>
-      </div>
-      {req.source === 'none' ? (
-        <p className="text-[13px] text-[#939393]">
-          Nothing was recorded for this {isExtension ? 'extension' : 'model'}
-          {req.pointerBroken ? ', and the record it points to is no longer in the database.' : '.'}
-        </p>
-      ) : (
-        <div className="space-y-4">
-          {rows.map(({ label, value }) => (
-            <div key={label} className="grid grid-cols-[110px_1fr]">
-              <span className="text-[12px] text-[#939393]">{label}</span>
-              <span className="text-[13px] text-black min-w-0">{value}</span>
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
+    <ModelProvenanceCard
+      name={req.name}
+      requirement={req.requirement}
+      category={req.category}
+      provenance={req.source === 'none' ? null : req.data}
+      badge={badge}
+      emptyMessage={emptyMessage}
+    />
   );
 }
 
@@ -517,16 +472,28 @@ export default function ImageInfoViewer() {
 
   const handleToggle = useCallback((id: string) => {
     setExpanded((prev) => {
-      const next = new Set(prev);
       const allNodes = [...lineageNodes, ...extraNodes];
       const allLinks = [...lineageLinks, ...extraLinks];
+      const index = buildIndex(allNodes, allLinks);
+      const beforeVisible = computeVisible(index, prev, DROPPED_ROOT);
+
+      const next = new Set(prev);
       if (next.has(id)) {
         next.delete(id);
-        const index = buildIndex(allNodes, allLinks);
         const stillVisible = computeVisible(index, next, DROPPED_ROOT);
         for (const n of [...next]) { if (!stillVisible.has(n)) next.delete(n); }
       } else {
         next.add(id);
+      }
+
+      // A leaf node — nothing reachable from it — toggling its own expanded
+      // flag doesn't change what's actually on screen. Returning the same
+      // Set reference tells React to bail out of this update entirely, so
+      // the graph doesn't redraw/re-simulate (and visibly jiggle) for a
+      // click that had nothing to expand or collapse.
+      const afterVisible = computeVisible(index, next, DROPPED_ROOT);
+      if (beforeVisible.size === afterVisible.size && [...beforeVisible].every((v) => afterVisible.has(v))) {
+        return prev;
       }
       return next;
     });

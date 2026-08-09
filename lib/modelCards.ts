@@ -164,6 +164,65 @@ export function computeReviewStatus(
   return matrix[riskBucket][evidenceBucket];
 }
 
+export type WorkflowStatusSummary = {
+  /** Worst-case verdict among reviewed requirements, or 'unknown' if none
+   *  of them have completed review — see computeWorkflowStatus() below. */
+  status: ReviewStatus;
+  total: number;
+  verdictCount: number;
+  pendingReviewCount: number;
+  notInDatabaseCount: number;
+};
+
+/**
+ * Rolls up a whole workflow's resolved model cards into one consolidated
+ * status, for the workflow-level badge in app/workflow-review/page.tsx.
+ *
+ * Pass one entry per requirement in the workflow: the matched
+ * ModelCardRecord, or `null` for anything with no database/Hugging Face
+ * record at all — a missing record_id, a record_id that didn't resolve
+ * (fetchModelCard returned null), or a manual-fallback entry that was
+ * never reviewed in the first place. All three of those are the same
+ * "notInDatabase" bucket here; the caller (the page) still tells them
+ * apart for rendering purposes, but the rollup only needs "is there a
+ * record to grade at all".
+ *
+ * Every record splits into exactly one of three buckets:
+ *   - verdict:  has a record, and it has completed review (status !== 'unknown')
+ *   - pending:  has a record, but review isn't done yet (status === 'unknown')
+ *   - missing:  no record at all
+ *
+ * Only the verdict bucket ever influences the workflow badge — worst case
+ * wins among those. pending and missing never pull the badge in either
+ * direction: a workflow badge implying a risk verdict for a model nobody
+ * has actually reviewed would be a false safety claim. If there are no
+ * verdict-bucket records at all, the workflow status is 'unknown', and the
+ * page's copy should say so plainly rather than imply anything was checked.
+ */
+export function computeWorkflowStatus(records: (ModelCardRecord | null)[]): WorkflowStatusSummary {
+  const total = records.length;
+  let verdictCount = 0;
+  let pendingReviewCount = 0;
+  let notInDatabaseCount = 0;
+  const verdictStatuses: ReviewStatus[] = [];
+
+  for (const record of records) {
+    if (!record) {
+      notInDatabaseCount++;
+    } else if (record.status === 'unknown') {
+      pendingReviewCount++;
+    } else {
+      verdictCount++;
+      verdictStatuses.push(record.status);
+    }
+  }
+
+  const worstToBest: ReviewStatus[] = ['potentially_problematic', 'needs_review', 'likely_safe', 'vetted'];
+  const status = worstToBest.find((s) => verdictStatuses.includes(s)) ?? 'unknown';
+
+  return { status, total, verdictCount, pendingReviewCount, notInDatabaseCount };
+}
+
 /**
  * size_bytes has no home on the card schema yet — Claudius is adding it to
  * the template later. Hardcoded here from the values Supabase already had

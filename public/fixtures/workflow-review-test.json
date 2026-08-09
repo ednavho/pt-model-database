@@ -1,0 +1,113 @@
+{
+  "pseudorandom_workflow_schema_version": 0.3,
+  "type": "comfy",
+  "name": "Hugo",
+  "description": "Basic SD Hyper model and 'dense diffusion' style regional prompting.",
+  "thumbnail": null,
+  "attribution": {
+    "author": "Pseudotools",
+    "author_url": "https://github.com/pseudotools/",
+    "license": "GNU General Public License v3.0"
+  },
+  "global_guidance_capabilities": {
+    "txt_scene": true,
+    "txt_style": true,
+    "txt_negative": true,
+    "img_style": false
+  },
+  "regional_guidance_capabilities": {
+    "text": true,
+    "image": false
+  },
+  "spatial_guidance_capabilities": {
+    "depth": true,
+    "edge": false
+  },
+  "variables": [
+    {
+      "name": "Adherence",
+      "type": "float",
+      "description": "How closely the render follows the scene guidance.",
+      "default": 0.75,
+      "binds_to": "__ADHERENCE__",
+      "min": 0,
+      "max": 1,
+      "step": 0.05
+    },
+    {
+      "name": "Mask Softness",
+      "type": "float",
+      "description": "How much to soften material prompt masks — softer masks apply to wider areas; harder ones are more constrained.",
+      "default": 0.9,
+      "binds_to": "__MASK_SOFTNESS__",
+      "min": 0,
+      "max": 1,
+      "step": 0.05
+    }
+  ],
+  "endpoint_requirements": [
+    {
+      "display_name": "Juggernaut X RunDiffusion Hyper",
+      "category": "checkpoints",
+      "requirement": "Juggernaut_X_RunDiffusion_Hyper.safetensors",
+      "record_id": "pseudotools/checkpoint-juggernaut-x-hyper",
+      "provenance": {
+        "download_url": null, "size_bytes": null, "license_id": null, "license_url": null,
+        "attribution_name": null, "attribution_url": null, "reviewer": null, "reviewed_at": null,
+        "license_findings": null, "evidence": null, "rationale": null,
+        "risk_severity": -1, "evidence_completeness": -1, "evidence_reliability": -1
+      }
+    },
+    {
+      "display_name": "Stable Diffusion XL Base 1.0",
+      "category": "checkpoints",
+      "requirement": "sd_xl_base_1.0.safetensors",
+      "record_id": "pseudotools/checkpoint-sdxl-base-1-0",
+      "provenance": {
+        "download_url": null, "size_bytes": null, "license_id": null, "license_url": null,
+        "attribution_name": null, "attribution_url": null, "reviewer": null, "reviewed_at": null,
+        "license_findings": null, "evidence": null, "rationale": null,
+        "risk_severity": -1, "evidence_completeness": -1, "evidence_reliability": -1
+      }
+    },
+    {
+      "display_name": "some_unlisted_model.safetensors",
+      "category": "checkpoints",
+      "requirement": "some_unlisted_model.safetensors",
+      "record_id": "pseudotools/checkpoint-this-does-not-exist",
+      "provenance": {
+        "download_url": null, "size_bytes": null, "license_id": null, "license_url": null,
+        "attribution_name": null, "attribution_url": null, "reviewer": null, "reviewed_at": null,
+        "license_findings": null, "evidence": null, "rationale": null,
+        "risk_severity": -1, "evidence_completeness": -1, "evidence_reliability": -1
+      }
+    },
+    {
+      "display_name": "My Custom LoRA",
+      "category": "loras",
+      "requirement": "my_custom_lora.safetensors",
+      "provenance": {
+        "download_url": "https://civitai.com/models/000000",
+        "size_bytes": 151234567,
+        "license_id": "CreativeML Open RAIL-M",
+        "license_url": "https://huggingface.co/spaces/CompVis/stable-diffusion-license",
+        "attribution_name": "Some Creator",
+        "attribution_url": "https://civitai.com/user/some-creator"
+      }
+    },
+    {
+      "display_name": "Pseudocomfy",
+      "category": "custom_nodes",
+      "requirement": "pseudocomfy",
+      "provenance": {
+        "download_url": "https://github.com/pseudotools/pseudocomfy",
+        "size_bytes": null,
+        "license_id": "GNU General Public License v3.0",
+        "license_url": null,
+        "attribution_name": "Pseudotools - Pseudocomfy custom nodes for ComfyUI.",
+        "attribution_url": "https://github.com/pseudotools/"
+      }
+    }
+  ],
+  "workflow": {}
+}
