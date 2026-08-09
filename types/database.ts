@@ -1,64 +1,11 @@
+// Model provenance moved to Hugging Face card repos (see lib/modelCards.ts)
+// and is no longer read from Supabase, except for the lineage feature,
+// which is a separate, deliberately still-Supabase-based track. This type
+// is the one piece of the old model schema still load-bearing there —
+// app/image-info/ImageInfoViewer.tsx and components/ui/VettingBadge.tsx
+// both still use it for lineage-tab rendering. Everything else that used
+// to live in this file (Model, ModelDetail, ModelInsert, ModelUpdate,
+// MODEL_CATEGORIES) had no remaining callers once the models pages and
+// forms were migrated, and was removed rather than left as dead exports
+// of a schema nothing writes anymore.
 export type VettingStatus = 'vetted' | 'potentially_problematic' | 'unknown';
-
-export interface Model {
-  id: string;
-  category_id: string;
-  name: string | null;
-  file_name: string;
-  download_url: string | null;
-  attribution: string | null;
-  attribution_url: string | null;
-  license: string | null;
-  data_provenance_notes: string | null;
-  size_bytes: number | null;
-  vetting_status_id: string;
-  used_by_workflows: string[] | null;
-  created_at: string;
-  updated_at: string;
-  model_categories: { name: string } | null;
-  vetting_statuses: { name: string } | null;
-}
-
-// Shape returned by GET /api/models/:id — FK references resolved to human-readable values
-export interface ModelDetail {
-  id: string;
-  category: string;
-  name: string | null;
-  file_name: string;
-  download_url: string | null;
-  attribution: string | null;
-  attribution_url: string | null;
-  license: string | null;
-  data_provenance_notes: string | null;
-  size_bytes: number | null;
-  vetting_status: string;
-  used_by_workflows: string[] | null;
-  created_at: string;
-  updated_at: string;
-}
-
-export interface ModelInsert {
-  category_id: string;
-  name?: string | null;
-  file_name: string;
-  download_url?: string | null;
-  attribution?: string | null;
-  attribution_url?: string | null;
-  license?: string | null;
-  data_provenance_notes?: string | null;
-  size_bytes?: number | null;
-  vetting_status_id?: string;
-  used_by_workflows?: string[] | null;
-}
-
-export interface ModelUpdate extends Partial<ModelInsert> {}
-
-export const MODEL_CATEGORIES = [
-  'checkpoints',
-  'controlnet',
-  'loras',
-  'clip_vision',
-  'ipadapter',
-] as const;
-
-export type ModelCategory = (typeof MODEL_CATEGORIES)[number];

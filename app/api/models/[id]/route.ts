@@ -26,7 +26,6 @@
  */
 
 import { createClient } from '@/utils/supabase/server';
-import { isInternalUser } from '@/utils/auth';
 import { NextRequest, NextResponse } from 'next/server';
 
 type RouteContext = { params: Promise<{ id: string }> };
@@ -35,8 +34,6 @@ export async function GET(_req: NextRequest, { params }: RouteContext) {
   try {
     const supabase = await createClient();
     const { id } = await params;
-
-    // Auth guard placeholder
 
     const { data, error } = await supabase
       .from('models')
@@ -76,13 +73,6 @@ export async function PATCH(req: NextRequest, { params }: RouteContext) {
     const supabase = await createClient();
     const { id } = await params;
 
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
-    if (!user || !isInternalUser(user.email)) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
-
     const body = await req.json();
 
     // Strip id/created_at from body to prevent overwrite
@@ -114,13 +104,6 @@ export async function DELETE(_req: NextRequest, { params }: RouteContext) {
   try {
     const supabase = await createClient();
     const { id } = await params;
-
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
-    if (!user || !isInternalUser(user.email)) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
 
     const { error } = await supabase
             .from('models')

@@ -10,7 +10,6 @@
 export type PngRequirement = {
   category: string;
   requirement: string;
-  provenance_id: string | null;
 };
 
 export type PngReadResult =
@@ -36,7 +35,6 @@ function toRequirement(v: unknown): PngRequirement | null {
   return {
     category: typeof r.category === 'string' ? r.category : '—',
     requirement: r.requirement,
-    provenance_id: typeof r.provenance_id === 'string' ? r.provenance_id : null,
   };
 }
 

@@ -34,8 +34,6 @@ const KNOWN_NODE_IDS = new Set(lineageNodes.map((n) => n.id));
 type MatchRow = {
   requirement: string;
   category: string;
-  provenanceId: string | null;
-  via: 'provenance_id' | 'filename' | null;
   nodeId: string | null;
 };
 
@@ -53,49 +51,29 @@ type DropState =
   | { kind: 'ok'; data: Dropped };
 
 /**
- * Turns a dropped image's requirements into graph nodes.
- *
- * The pointer wins: a requirement carrying a provenance_id is resolved through
- * the database so the canonical filename decides which lineage node it lands
- * on, rather than trusting whatever string the workflow happened to record.
- * Requirements with no pointer fall back to their own filename.
+ * Turns a dropped image's requirements into graph nodes, matching purely by
+ * requirement filename against the static lineage data — no database
+ * lookup, no Supabase connection. A pre-migration image's provenance_id
+ * (a Supabase pointer some old renders still carry) is never read; the
+ * filename the workflow itself recorded is the only key this ever uses.
  */
-async function buildFromRequirements(
-  fileName: string,
-  requirements: PngRequirement[]
-): Promise<Dropped> {
-  const ids = [...new Set(requirements.map((r) => r.provenance_id).filter(Boolean))] as string[];
-  const records = await Promise.all(
-    ids.map((id) =>
-      fetch(`/api/models/${id}`)
-        .then((r) => (r.ok ? r.json() : null))
-        .catch(() => null)
-    )
-  );
-  const fileById = new Map<string, string>();
-  ids.forEach((id, i) => {
-    const f = records[i]?.file_name;
-    if (typeof f === 'string') fileById.set(id, f);
-  });
-
+function buildFromRequirements(fileName: string, requirements: PngRequirement[]): Dropped {
   const extraNodes: LineageNode[] = [{ id: DROPPED_ROOT, label: fileName, type: 'root' }];
   const extraLinks: LineageLink[] = [];
   const rows: MatchRow[] = [];
   const linked = new Set<string>();
 
   for (const r of requirements) {
-    const dbFile = r.provenance_id ? fileById.get(r.provenance_id) : undefined;
-    const key = dbFile ?? r.requirement;
+    const key = r.requirement;
     // Extensions like "pseudocomfy" aren't filenames but do have lineage nodes.
     const nodeId = MODEL_FILE_TO_NODE[key] ?? (KNOWN_NODE_IDS.has(key) ? key : null);
-    const via = r.provenance_id && dbFile ? 'provenance_id' : 'filename';
 
     if (nodeId) {
       if (!linked.has(nodeId)) {
         extraLinks.push({ source: DROPPED_ROOT, target: nodeId, label: 'requires', verified: true });
         linked.add(nodeId);
       }
-      rows.push({ requirement: r.requirement, category: r.category, provenanceId: r.provenance_id, via, nodeId });
+      rows.push({ requirement: r.requirement, category: r.category, nodeId });
     } else {
       // Still show it — an unmapped requirement is a finding, not something
       // to hide. It appears as a leaf with no lineage behind it.
@@ -105,7 +83,7 @@ async function buildFromRequirements(
         extraLinks.push({ source: DROPPED_ROOT, target: synthetic, label: 'requires', verified: true });
         linked.add(synthetic);
       }
-      rows.push({ requirement: r.requirement, category: r.category, provenanceId: r.provenance_id, via: null, nodeId: null });
+      rows.push({ requirement: r.requirement, category: r.category, nodeId: null });
     }
   }
 
@@ -249,7 +227,7 @@ export default function LineageSketch() {
       return;
     }
 
-    const data = await buildFromRequirements(result.fileName, result.requirements);
+    const data = buildFromRequirements(result.fileName, result.requirements);
 
     const newUrl = URL.createObjectURL(file);
     const img = new Image();
@@ -361,7 +339,6 @@ export default function LineageSketch() {
               <tr className="border-b border-zinc-100 bg-zinc-50 text-left text-zinc-400">
                 <th className="px-3 py-2 font-semibold uppercase tracking-wide">Requirement</th>
                 <th className="px-3 py-2 font-semibold uppercase tracking-wide">Category</th>
-                <th className="px-3 py-2 font-semibold uppercase tracking-wide">Matched via</th>
                 <th className="px-3 py-2 font-semibold uppercase tracking-wide">Lineage node</th>
               </tr>
             </thead>
@@ -370,15 +347,6 @@ export default function LineageSketch() {
                 <tr key={`${r.requirement}-${i}`} className="border-b border-zinc-100 last:border-0">
                   <td className="px-3 py-2 font-mono text-zinc-700 break-all">{r.requirement}</td>
                   <td className="px-3 py-2 text-zinc-500">{r.category}</td>
-                  <td className="px-3 py-2 text-zinc-500">
-                    {r.via === 'provenance_id' ? (
-                      <span className="text-zinc-900">provenance_id → database</span>
-                    ) : r.via === 'filename' ? (
-                      'filename'
-                    ) : (
-                      <span className="text-amber-700">no match</span>
-                    )}
-                  </td>
                   <td className="px-3 py-2 font-mono text-zinc-500">
                     {r.nodeId ?? <span className="not-italic text-amber-700">no lineage recorded</span>}
                   </td>

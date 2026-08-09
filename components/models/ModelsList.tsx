@@ -2,38 +2,12 @@
 
 import { Suspense, useState } from 'react';
 import Link from 'next/link';
-import VettingBadge from '@/components/ui/VettingBadge';
-import { VettingStatus } from '@/types/database';
+import RiskBadge from '@/components/ui/RiskBadge';
+import { formatBytes, type ModelCardRecord } from '@/lib/modelCards';
+import { cn } from '@/utils/cn';
 import FilterDropdown from '@/components/models/FilterDropdown';
 
-type ModelRow = {
-  id: string;
-  name: string | null;
-  file_name: string;
-  download_url: string | null;
-  license: string | null;
-  size_bytes: number | null;
-  model_categories: { name: string } | null;
-  vetting_statuses: { name: string } | null;
-};
-
 type FilterOption = { value: string; label: string };
-
-const LABELS: Record<string, string> = {
-  checkpoints: 'Checkpoint',
-  controlnet: 'ControlNet',
-  loras: 'LoRA',
-  clip_vision: 'Clip Vision',
-  ipadapter: 'IPAdapter',
-};
-
-function formatBytes(bytes: number | null) {
-  if (!bytes) return '—';
-  const gb = bytes / 1_073_741_824;
-  if (gb >= 1) return `${gb.toFixed(1)} GB`;
-  const mb = bytes / 1_048_576;
-  return `${mb.toFixed(0)} MB`;
-}
 
 function DownloadIcon() {
   return (
@@ -58,27 +32,37 @@ export default function ModelsList({
   models,
   totalCount,
   selectedCategories,
-  selectedStatuses,
+  selectedRisks,
   categoryOptions,
-  statusOptions,
-  internal,
+  riskOptions,
 }: {
-  models: ModelRow[];
+  models: ModelCardRecord[];
   totalCount: number;
   selectedCategories: string[];
-  selectedStatuses: string[];
+  selectedRisks: string[];
   categoryOptions: FilterOption[];
-  statusOptions: FilterOption[];
-  internal: boolean;
+  riskOptions: FilterOption[];
 }) {
   const [search, setSearch] = useState('');
 
-  const filtered = search.trim()
-    ? models.filter((m) => {
-        const q = search.toLowerCase();
-        return (m.name?.toLowerCase().includes(q) || m.file_name.toLowerCase().includes(q));
-      })
-    : models;
+  const matchesCategory = (m: ModelCardRecord) =>
+    selectedCategories.length === 0 || selectedCategories.includes(m.category);
+  const matchesRisk = (m: ModelCardRecord) =>
+    selectedRisks.length === 0 || selectedRisks.includes(m.status);
+  const matchesSearch = (m: ModelCardRecord) => {
+    if (!search.trim()) return true;
+    const q = search.toLowerCase();
+    return (
+      m.display_name.toLowerCase().includes(q) || (m.requirement ?? '').toLowerCase().includes(q)
+    );
+  };
+
+  const filtered = models.filter((m) => matchesCategory(m) && matchesRisk(m) && matchesSearch(m));
+  // categoryOptions already has the display label per category (e.g.
+  // "clip_vision" -> "Clip Vision") — reuse it here instead of a plain CSS
+  // capitalize, which can't turn "clip_vision" into "Clip Vision" since
+  // there's no word-break at an underscore.
+  const categoryLabel = (cat: string) => categoryOptions.find((o) => o.value === cat)?.label ?? cat;
 
   return (
     <>
@@ -93,10 +77,10 @@ export default function ModelsList({
         </Suspense>
         <Suspense fallback={<div className="h-8 w-[120px] rounded-[8px] bg-zinc-50 border border-[#E9E9E9]" />}>
           <FilterDropdown
-            dropdownLabel="Status"
-            options={statusOptions}
-            selected={selectedStatuses}
-            paramName="status"
+            dropdownLabel="Risk"
+            options={riskOptions}
+            selected={selectedRisks}
+            paramName="risk"
           />
         </Suspense>
         <div className="relative flex-1">
@@ -111,22 +95,34 @@ export default function ModelsList({
             className="border border-[#E9E9E9] rounded-[8px] pl-8 pr-3 py-[7px] text-[14px] outline-none focus:border-[#B0B0B0] bg-white w-full transition-colors"
           />
         </div>
-        {internal && (
-          <Link
-            href="/models/new"
-            className="shrink-0 text-[13px] border border-[#E9E9E9] rounded-[8px] px-3 py-[7px] text-zinc-700 hover:border-zinc-400 transition-colors"
-          >
-            + Add Model
-          </Link>
-        )}
+        <Link
+          href="/models/new"
+          className="shrink-0 text-[13px] border border-[#E9E9E9] rounded-[8px] px-3 py-[7px] text-zinc-700 hover:border-zinc-400 transition-colors"
+        >
+          + Add Model
+        </Link>
       </div>
 
       <div className="border border-[#E9E9E9] rounded-[8px] overflow-x-auto">
-        <table className="w-full text-sm">
+        <table className="w-full text-sm table-fixed">
+          <colgroup>
+            <col className="w-[30%]" />
+            <col className="w-[12%]" />
+            <col className="w-[15%]" />
+            <col className="w-[20%]" />
+            <col className="w-[13%]" />
+            <col className="w-[10%]" />
+          </colgroup>
           <thead>
             <tr className="border-b border-[#E9E9E9]">
               {['Name', 'Category', 'Status', 'License', 'Size', 'Download'].map((col) => (
-                <th key={col} className="text-left text-[14px] font-medium text-black px-4 py-3">
+                <th
+                  key={col}
+                  className={cn(
+                    'text-[14px] font-medium text-black px-4 py-3',
+                    col === 'Download' ? 'text-center' : 'text-left'
+                  )}
+                >
                   {col}
                 </th>
               ))}
@@ -141,39 +137,40 @@ export default function ModelsList({
               </tr>
             ) : (
               filtered.map((model) => (
-                <tr key={model.id} className="border-b border-[#E9E9E9] last:border-0 hover:bg-zinc-50/50">
-                  <td className="px-4 py-3">
+                <tr key={model.record_id} className="border-b border-[#E9E9E9] last:border-0 hover:bg-zinc-50/50">
+                  <td className="px-4 py-3 overflow-hidden">
                     <Link
-                      href={`/models/${model.id}`}
-                      className="font-medium text-black hover:underline block text-[13px]"
+                      href={`/models/${model.record_id}`}
+                      className="font-medium text-black hover:underline block truncate text-[13px]"
                     >
-                      {model.name ?? model.file_name}
+                      {model.display_name}
                     </Link>
-                    {model.name && (
-                      <span className="text-[12px] font-mono" style={{ color: '#939393' }}>
-                        {model.file_name}
+                    {model.requirement && (
+                      <span className="block truncate text-[12px] font-mono" style={{ color: '#939393' }}>
+                        {model.requirement}
                       </span>
                     )}
                   </td>
                   <td className="px-4 py-3 text-[13px] text-zinc-600">
-                    {LABELS[model.model_categories?.name?.toLowerCase() ?? ''] ?? model.model_categories?.name ?? '—'}
+                    {model.category ? categoryLabel(model.category) : '—'}
                   </td>
                   <td className="px-4 py-3">
-                    <VettingBadge status={model.vetting_statuses?.name?.toLowerCase() as VettingStatus} />
+                    <RiskBadge record={model} />
+                  </td>
+                  <td className="px-4 py-3 text-[13px] text-zinc-500 truncate" title={model.provenance.license_id ?? undefined}>
+                    {model.provenance.license_id ?? '—'}
                   </td>
                   <td className="px-4 py-3 text-[13px] text-zinc-500">
-                    {model.license ?? '—'}
+                    {formatBytes(model.provenance.size_bytes)}
                   </td>
-                  <td className="px-4 py-3 text-[13px] text-zinc-500">
-                    {formatBytes(model.size_bytes)}
-                  </td>
-                  <td className="px-4 py-3">
-                    {model.download_url ? (
+                  <td className="px-4 py-3 text-center">
+                    {model.provenance.download_url ? (
                       <a
-                        href={model.download_url}
+                        href={model.provenance.download_url}
                         target="_blank"
                         rel="noopener noreferrer"
                         className="inline-flex items-center justify-center w-[30px] h-[30px] border border-[#D8D8D8] rounded-[8px] text-zinc-500 hover:border-zinc-400 hover:text-zinc-700 transition-colors"
+                        title="Download"
                       >
                         <DownloadIcon />
                       </a>

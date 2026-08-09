@@ -227,12 +227,15 @@ export function looksLikeModelLoader(classType: string): boolean {
 export const PSEUDO_CLASS_TYPE_PREFIX = 'Pseudo';
 
 export const PSEUDOCOMFY_REQUIREMENT = {
+  display_name: 'Pseudocomfy',
   category: 'custom_nodes',
   requirement: 'pseudocomfy',
   provenance: {
-    attribution: 'Pseudotools - Pseudocomfy custom nodes for ComfyUI.',
-    attribution_url: 'https://github.com/pseudotools/',
     download_url: 'https://github.com/pseudotools/pseudocomfy',
-    license: 'GNU General Public License v3.0',
+    size_bytes: null,
+    license_id: 'GNU General Public License v3.0',
+    license_url: null,
+    attribution_name: 'Pseudotools - Pseudocomfy custom nodes for ComfyUI.',
+    attribution_url: 'https://github.com/pseudotools/',
   },
 };
