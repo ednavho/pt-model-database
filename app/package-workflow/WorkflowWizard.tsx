@@ -1250,7 +1250,7 @@ export default function WorkflowWizard() {
     <div className="flex flex-col h-[calc(100dvh-3.5rem)]">
       {/* Full-width Workflow Converter title */}
       <div className="shrink-0 px-6 pt-8 pb-4">
-        <p className="text-[13px] font-semibold text-black">Workflow Converter</p>
+        <p className="text-[15px] font-semibold text-black">Workflow Converter</p>
       </div>
 
       {/* Three-column row — all top-aligned */}
