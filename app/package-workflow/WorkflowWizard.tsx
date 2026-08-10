@@ -921,7 +921,6 @@ export default function WorkflowWizard() {
 
   const addManualModel = (category = 'checkpoints', forLoaderNodeId: string | null = null) => {
     setPossibleModels((prev) => [
-      ...prev,
       {
         key: `manual:${Date.now()}:${Math.random().toString(36).slice(2, 7)}`,
         nodeId: null,
@@ -932,6 +931,7 @@ export default function WorkflowWizard() {
         provenance: { ...emptyProvenance },
         forLoaderNodeId,
       },
+      ...prev,
     ]);
   };
 
@@ -1294,7 +1294,61 @@ export default function WorkflowWizard() {
       {/* ── Step 3: Possible models ────────────────────────────────────── */}
       {step === 'possible-models' && (
         <div>
+          {(unseenLoaders.length > 0 || possibleModels.length > 0) && (
+            <div className="flex items-center justify-end mb-4">
+              <button
+                onClick={() => addManualModel('checkpoints', null)}
+                className="shrink-0 border border-[#E9E9E9] bg-white rounded-[8px] px-3 py-1.5 text-[13px] text-black hover:border-[#B0B0B0] transition-colors whitespace-nowrap"
+              >
+                + Add Model
+              </button>
+            </div>
+          )}
           <div className="space-y-4">
+            {/* Manually added models not tied to a specific unseen loader */}
+            {possibleModels.filter((p) => p.nodeId === null && !p.forLoaderNodeId).map((p) => (
+              <div
+                key={p.key}
+                className={cn('border rounded-[8px] p-5 transition-colors', p.selected ? 'border-black' : 'border-[#E9E9E9]')}
+              >
+                <div className="flex items-start gap-3">
+                  <input
+                    type="checkbox"
+                    checked={p.selected}
+                    onChange={(e) => updatePossible(p.key, 'selected', e.target.checked)}
+                    className="mt-1 shrink-0 w-4 h-4 accent-black"
+                  />
+                  <div className="flex-1 min-w-0">
+                    {!p.selected && (
+                      <p className="text-[15px] font-semibold text-black">{p.fileName || 'New model'}</p>
+                    )}
+                    {p.selected && (
+                      <div className="space-y-4">
+                        <div>
+                          <label className={CARD_LABEL}>File name <InfoTooltip text="The model filename as referenced in the workflow graph" /></label>
+                          <input className={CARD_INPUT} value={p.fileName} onChange={(e) => updatePossible(p.key, 'fileName', e.target.value)} placeholder="filename.safetensors" />
+                        </div>
+                        <div>
+                          <label className={CARD_LABEL}>Category <InfoTooltip text="The ComfyUI subfolder where this model is stored" /></label>
+                          <SelectInput className={cn(CARD_INPUT, 'cursor-pointer')} value={p.category} onChange={(e) => updatePossible(p.key, 'category', e.target.value)}>
+                            {COMFY_MODEL_FOLDERS.map((f) => <option key={f} value={f}>{LOADER_CAT_LABELS[f] ?? f}</option>)}
+                          </SelectInput>
+                        </div>
+                        <div className="grid grid-cols-2 gap-4">
+                          <div><label className={CARD_LABEL}>Download URL <InfoTooltip text="Where to download this model" /></label><input className={CARD_INPUT} value={p.provenance.download_url} onChange={(e) => updatePossibleProvenance(p.key, 'download_url', e.target.value)} placeholder="https://huggingface.co/..." /></div>
+                          <div><label className={CARD_LABEL}>Size (bytes) <InfoTooltip text="File size in bytes" /></label><input type="number" className={CARD_INPUT} value={p.provenance.size_bytes} onChange={(e) => updatePossibleProvenance(p.key, 'size_bytes', e.target.value)} placeholder="e.g. 7105348616" /></div>
+                          <div><label className={CARD_LABEL}>License ID <InfoTooltip text="License governing use of this model" /></label><input className={CARD_INPUT} value={p.provenance.license_id} onChange={(e) => updatePossibleProvenance(p.key, 'license_id', e.target.value)} placeholder="e.g. Apache 2.0" /></div>
+                          <div><label className={CARD_LABEL}>License URL <InfoTooltip text="Link to the license text" /></label><input className={CARD_INPUT} value={p.provenance.license_url} onChange={(e) => updatePossibleProvenance(p.key, 'license_url', e.target.value)} placeholder="https://..." /></div>
+                          <div><label className={CARD_LABEL}>Attribution <InfoTooltip text="Credit the creator or source of this model" /></label><input className={CARD_INPUT} value={p.provenance.attribution_name} onChange={(e) => updatePossibleProvenance(p.key, 'attribution_name', e.target.value)} placeholder="Creator or organization" /></div>
+                          <div><label className={CARD_LABEL}>Attribution URL <InfoTooltip text="Link to the creator's page or original source" /></label><input className={CARD_INPUT} value={p.provenance.attribution_url} onChange={(e) => updatePossibleProvenance(p.key, 'attribution_url', e.target.value)} placeholder="https://..." /></div>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            ))}
+
             {/* Unseen loaders + any models added for each */}
             {unseenLoaders.map((ul) => {
               const addedForLoader = possibleModels.filter((p) => p.forLoaderNodeId === ul.nodeId);
@@ -1382,7 +1436,7 @@ export default function WorkflowWizard() {
             })}
 
             {/* Scan-detected + ungrouped models */}
-            {possibleModels.filter((p) => !p.forLoaderNodeId).map((p) => (
+            {possibleModels.filter((p) => !p.forLoaderNodeId && p.nodeId !== null).map((p) => (
               <div
                 key={p.key}
                 className={cn('border rounded-[8px] p-5 transition-colors', p.selected ? 'border-black' : 'border-[#E9E9E9]')}
@@ -1428,7 +1482,15 @@ export default function WorkflowWizard() {
             ))}
 
             {unseenLoaders.length === 0 && possibleModels.length === 0 && (
-              <p className="text-[13px] text-[#939393]">No models found in this workflow.</p>
+              <div>
+                <p className="text-[13px] text-[#939393]">No models found in this workflow.</p>
+                <button
+                  onClick={() => addManualModel('checkpoints', null)}
+                  className="mt-3 border border-[#E9E9E9] bg-white rounded-[8px] px-3 py-1.5 text-[13px] text-black hover:border-[#B0B0B0] transition-colors"
+                >
+                  + Add Model
+                </button>
+              </div>
             )}
           </div>
 
