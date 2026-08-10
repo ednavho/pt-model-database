@@ -519,7 +519,7 @@ export default function ImageInfoViewer() {
 
       {/* Title — full-width header, matches PWW "Workflow Converter" */}
       <div className="shrink-0 px-6 pt-8 pb-4">
-        <p className="text-[13px] font-semibold text-black">Image Inspector</p>
+        <p className="text-[15px] font-semibold text-black">Image Inspector</p>
       </div>
 
       <div className="flex flex-1 min-h-0 overflow-hidden pt-4">

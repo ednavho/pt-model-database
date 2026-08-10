@@ -755,6 +755,8 @@ export default function WorkflowWizard() {
   const panelDragRef = useRef<{ startX: number; startWidth: number } | null>(null);
   const rightPanelRef = useRef<HTMLDivElement>(null);
   const baselineRef = useRef<string | null>(null);
+  const codeScrollRef = useRef<HTMLDivElement>(null);
+  const codeLineRefs = useRef<Array<HTMLDivElement | null>>([]);
 
   const handlePanelDragStart = (e: React.MouseEvent) => {
     e.preventDefault();
@@ -1099,6 +1101,112 @@ export default function WorkflowWizard() {
   const diffAdded = useMemo(() => diffResult?.filter(l => l.type === 'add').length ?? 0, [diffResult]);
   const diffRemoved = useMemo(() => diffResult?.filter(l => l.type === 'remove').length ?? 0, [diffResult]);
 
+  // Given the line index of a requirement object's display_name (always
+  // its first key, one line below the object's opening brace), returns
+  // the line range worth bringing into view: the span of lines that
+  // actually changed from baseline within that object, so a big
+  // mostly-unchanged provenance blob doesn't drag the scroll target past
+  // what's actually visible. Falls back to just the anchor line if
+  // nothing in the object changed (e.g. it already matched baseline).
+  const findChangedBlockRange = (diffLines: DiffLine[], anchorIdx: number) => {
+    const openIdx = anchorIdx - 1;
+    let depth = 0;
+    let closeIdx = diffLines.length - 1;
+    for (let i = openIdx; i < diffLines.length; i++) {
+      for (const ch of diffLines[i].text) {
+        if (ch === '{' || ch === '[') depth++;
+        else if (ch === '}' || ch === ']') depth--;
+      }
+      if (depth === 0) { closeIdx = i; break; }
+    }
+    let start = -1, end = -1;
+    for (let i = openIdx; i <= closeIdx; i++) {
+      if (diffLines[i].type !== 'same') {
+        if (start === -1) start = i;
+        end = i;
+      }
+    }
+    return start === -1 ? { start: anchorIdx, end: anchorIdx } : { start, end };
+  };
+
+  // Which line range of the code panel this step is "about", so switching
+  // steps can scroll the panel to the part of the document that step
+  // edits — the db-match requirement, the first checked possible model,
+  // or the variables array.
+  const codeScrollTarget = useMemo(() => {
+    if (!diffResult) return null;
+    const lines = diffResult.map((l) => l.text);
+
+    if (step === 'requirements' && dbModels.length > 0) {
+      const m = dbModels[0];
+      const marker = `"display_name": ${JSON.stringify(m.dbMatch?.display_name || m.fileNameLocal)}`;
+      const idx = lines.findIndex((l) => l.includes(marker));
+      return idx === -1 ? null : findChangedBlockRange(diffResult, idx);
+    }
+
+    if (step === 'possible-models') {
+      const first = possibleModels.find((p) => p.selected && p.fileName.trim());
+      if (!first) return null;
+      const marker = `"display_name": ${JSON.stringify(first.fileName.trim())}`;
+      const idx = lines.findIndex((l) => l.includes(marker));
+      return idx === -1 ? null : findChangedBlockRange(diffResult, idx);
+    }
+
+    if (step === 'variables') {
+      const idx = lines.findIndex((l) => l.trim().startsWith('"variables":'));
+      return idx === -1 ? null : { start: idx, end: idx };
+    }
+
+    // Metadata edits (name, description, thumbnail, attribution) all land
+    // in the first few lines of the document, so there's no specific line
+    // to hunt for — just surface the top of the file.
+    if (step === 'metadata') {
+      return lines.length > 0 ? { start: 0, end: 0 } : null;
+    }
+
+    return null;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [step, diffResult, dbModels, possibleModels]);
+
+  // Gently eases the code panel to the target range rather than jumping —
+  // a plain scrollIntoView can't be given a duration/easing, so this
+  // animates scrollTop by hand. Top-aligns the range with some breathing
+  // room when it fits the panel; when it's taller than the panel, still
+  // starts from the top of the range (where the change begins matters
+  // more than its unchanged tail) but trims the padding to fit more of it.
+  useEffect(() => {
+    if (!codeScrollTarget) return;
+    const container = codeScrollRef.current;
+    const startEl = codeLineRefs.current[codeScrollTarget.start];
+    const endEl = codeLineRefs.current[codeScrollTarget.end];
+    if (!container || !startEl || !endEl) return;
+
+    const containerTop = container.getBoundingClientRect().top;
+    const startTop = startEl.getBoundingClientRect().top - containerTop + container.scrollTop;
+    const endBottom = endEl.getBoundingClientRect().bottom - containerTop + container.scrollTop;
+
+    const topPadding = 24;
+    const blockFits = endBottom - startTop + topPadding + 16 <= container.clientHeight;
+    const desiredScrollTop = Math.max(0, startTop - (blockFits ? topPadding : 8));
+
+    const startScrollTop = container.scrollTop;
+    const distance = desiredScrollTop - startScrollTop;
+    if (Math.abs(distance) < 2) return;
+
+    const duration = 700;
+    const startTime = performance.now();
+    const easeInOutCubic = (t: number) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2);
+
+    let rafId: number;
+    const animate = (now: number) => {
+      const t = Math.min((now - startTime) / duration, 1);
+      container.scrollTop = startScrollTop + distance * easeInOutCubic(t);
+      if (t < 1) rafId = requestAnimationFrame(animate);
+    };
+    rafId = requestAnimationFrame(animate);
+    return () => cancelAnimationFrame(rafId);
+  }, [codeScrollTarget]);
+
   const outputFileName = `${(workflowName || uploadedFileName?.replace(/\.json$/, '') || 'workflow').replace(/\s+/g, '_').toLowerCase()}.pseudorandom.json`;
 
   const downloadOutput = () => {
@@ -1142,7 +1250,7 @@ export default function WorkflowWizard() {
     <div className="flex flex-col h-[calc(100dvh-3.5rem)]">
       {/* Full-width Workflow Converter title */}
       <div className="shrink-0 px-6 pt-8 pb-4">
-        <p className="text-[13px] font-semibold text-black">Workflow Converter</p>
+        <p className="text-[15px] font-semibold text-black">Workflow Converter</p>
       </div>
 
       {/* Three-column row — all top-aligned */}
@@ -1791,10 +1899,11 @@ export default function WorkflowWizard() {
                 )}
               </div>
               {/* Diff content */}
-              <div className="flex-1 overflow-auto font-mono text-[11px] leading-[1.6]">
+              <div ref={codeScrollRef} className="flex-1 overflow-auto font-mono text-[11px] leading-[1.6]">
                 {diffResult ? diffResult.map((line, idx) => (
                   <div
                     key={idx}
+                    ref={(el) => { codeLineRefs.current[idx] = el; }}
                     className={
                       line.type === 'add' ? 'bg-[#eaffee] px-4' :
                       line.type === 'remove' ? 'bg-[#fff0f0] px-4' :
