@@ -47,7 +47,7 @@ export function InfoTooltip({ text }: { text: string }) {
         createPortal(
           <span
             className={cn(
-              'pointer-events-none fixed -translate-y-1/2 z-50 opacity-0 transition-opacity w-max max-w-[220px] bg-white border border-[#E9E9E9] rounded-[6px] px-2.5 py-2 text-[11px] text-[#555] leading-relaxed shadow-sm',
+              'pointer-events-none fixed -translate-y-1/2 z-50 opacity-0 transition-opacity w-max max-w-[220px] bg-white border border-[#E9E9E9] rounded-[6px] px-2.5 py-2 text-[11px] text-[#6B6B6B] leading-relaxed shadow-sm',
               visible && 'opacity-100'
             )}
             style={{ top: pos.top, left: pos.left }}
