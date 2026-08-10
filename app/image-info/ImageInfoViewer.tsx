@@ -561,7 +561,7 @@ export default function ImageInfoViewer() {
                 onDrop={handleDrop}
                 onClick={() => fileInputRef.current?.click()}
                 className={cn(
-                  'border border-dashed rounded-[8px] cursor-pointer transition-colors flex flex-col items-center justify-center min-h-[280px] gap-3',
+                  'relative border border-dashed rounded-[8px] cursor-pointer transition-colors flex flex-col items-center justify-center min-h-[280px] gap-3',
                   isDragging ? 'border-[#B0B0B0] bg-zinc-50' : 'border-[#D4D4D4] hover:border-[#B0B0B0]'
                 )}
               >
@@ -573,8 +573,8 @@ export default function ImageInfoViewer() {
                 <div className="text-center">
                   <p className="text-[15px] text-black">Select an image to upload</p>
                   <p className="text-[13px] text-[#939393] mt-1">or drag and drop it here</p>
-                  <p className="text-[13px] text-[#C0C0C0] mt-6">(Must be a Pseudorandom PNG)</p>
                 </div>
+                <p className="absolute bottom-10 left-0 right-0 text-center text-[13px] text-[#C0C0C0]">(Must be a Pseudorandom PNG)</p>
               </div>
             )}
 

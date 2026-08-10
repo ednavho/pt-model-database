@@ -21,6 +21,7 @@ import {
   VALUE_INPUT_KEYS,
   tokenFromName,
   type VarType,
+  type ComfyModelFolder,
 } from '@/config/pseudoNodeTypes';
 import JsonTree from '@/components/ui/JsonTree';
 import RiskBadge from '@/components/ui/RiskBadge';
@@ -290,36 +291,46 @@ function readExistingValue(node: Node, type: VarType): string {
 }
 
 /**
- * Sensible starting min/max/step for a numeric variable, bracketing its
- * detected default so the range actually contains it. A default of 5 becomes
- * 0…10, not 0…1. These are just starting points the nerd can overwrite.
+ * Sensible starting min/max/step for a numeric variable — fixed, intuitive
+ * ranges rather than scaling off the detected default. These are just
+ * starting points the nerd can overwrite.
  */
-function suggestRange(
-  defaultValue: string,
-  type: VarType
-): { min: string; max: string; step: string } {
-  const step = type === 'int' ? '1' : '0.05';
-  const d = Number(defaultValue);
+function suggestRange(type: VarType): { min: string; max: string; step: string } {
+  if (type === 'int') return { min: '0', max: '100', step: '1' };
+  return { min: '0', max: '10', step: '0.1' };
+}
 
-  // No usable default (empty, non-numeric) → generic range.
-  if (!Number.isFinite(d) || d === 0) {
-    return { min: '0', max: type === 'int' ? '10' : '1', step };
+/**
+ * Best-effort category guess for a scan-detected possible model, from the
+ * input field name (most reliable — ComfyUI loader nodes follow fairly
+ * consistent naming, e.g. `lora_name`, `vae_name`) and falling back to the
+ * node's class_type. Order matters: more specific needles (e.g.
+ * "clip_vision") must be checked before substrings they contain ("clip").
+ * Defaults to 'checkpoints' when nothing matches — the previous behavior.
+ */
+function guessPossibleModelCategory(field: string, classType: string): ComfyModelFolder {
+  const haystack = `${field} ${classType}`.toLowerCase();
+  const rules: [string, ComfyModelFolder][] = [
+    ['clip_vision', 'clip_vision'],
+    ['clipvision', 'clip_vision'],
+    ['ipadapter', 'ipadapter'],
+    ['ip_adapter', 'ipadapter'],
+    ['control_net', 'controlnet'],
+    ['controlnet', 'controlnet'],
+    ['lora', 'loras'],
+    ['vae_approx', 'vae_approx'],
+    ['vae', 'vae'],
+    ['upscale', 'upscale_models'],
+    ['style_model', 'style_models'],
+    ['unet', 'unet'],
+    ['clip', 'clip'],
+    ['ckpt', 'checkpoints'],
+    ['checkpoint', 'checkpoints'],
+  ];
+  for (const [needle, category] of rules) {
+    if (haystack.includes(needle)) return category;
   }
-
-  const round = (x: number) => (type === 'int' ? Math.round(x) : Number(x.toFixed(4)));
-
-  if (d > 0) {
-    // 0 … twice the default keeps the default comfortably inside the range.
-    return { min: '0', max: String(type === 'int' ? Math.ceil(d * 2) : round(d * 2)), step };
-  }
-
-  // Negative default (rare) → bracket it symmetrically around zero.
-  const bound = Math.abs(d) * 2;
-  return {
-    min: String(type === 'int' ? -Math.ceil(bound) : -round(bound)),
-    max: String(type === 'int' ? Math.ceil(bound) : round(bound)),
-    step,
-  };
+  return 'checkpoints';
 }
 
 function analyze(parsed: unknown): Analysis {
@@ -359,7 +370,7 @@ function analyze(parsed: unknown): Analysis {
         nodeId: node.id,
         nodeTitle: node.title,
         fileName: value,
-        category: 'checkpoints',
+        category: guessPossibleModelCategory(field, node.class_type),
         selected: false,
         provenance: { ...emptyProvenance },
       });
@@ -404,8 +415,7 @@ function analyze(parsed: unknown): Analysis {
       const type = PSEUDO_VARIABLE_CLASS_TYPES[n.class_type];
       const name = readVariableName(n);
       const defaultValue = readExistingValue(n, type);
-      // Bracket the range around the default so it isn't left outside it.
-      const { min, max, step } = suggestRange(defaultValue, type);
+      const { min, max, step } = suggestRange(type);
       return {
         nodeId: n.id,
         class_type: n.class_type,
@@ -636,7 +646,7 @@ function CodePreview({ code }: { code: string }) {
   );
 }
 
-const CARD_INPUT = 'w-full border border-[#E9E9E9] rounded-[8px] px-3 py-2 text-[13px] outline-none focus:border-[#B0B0B0] bg-white';
+const CARD_INPUT = 'w-full border border-[#E9E9E9] rounded-[8px] px-3 py-2 text-[13px] outline-none focus:border-[#B0B0B0] bg-white placeholder:text-[#B0B0B0]';
 const CARD_LABEL = 'flex items-center gap-1.5 text-[12px] text-[#939393] mb-1';
 const META_INPUT = 'w-full border-b border-[#E9E9E9] py-1.5 text-[13px] outline-none focus:border-b-black bg-transparent';
 const META_LABEL = 'flex items-center gap-1.5 text-[12px] text-[#939393] mb-1';
@@ -1194,7 +1204,7 @@ export default function WorkflowWizard() {
             onDrop={handleDrop}
             onClick={() => fileInputRef.current?.click()}
             className={cn(
-              'border border-dashed rounded-[8px] cursor-pointer transition-colors flex items-center justify-center min-h-[280px]',
+              'relative border border-dashed rounded-[8px] cursor-pointer transition-colors flex items-center justify-center min-h-[280px]',
               isDragging ? 'border-[#B0B0B0] bg-zinc-50' : 'border-[#D4D4D4] hover:border-[#B0B0B0]'
             )}
           >
@@ -1205,11 +1215,13 @@ export default function WorkflowWizard() {
                 <p className="text-[13px] text-[#939393] mt-1">click to replace</p>
               </div>
             ) : (
-              <div className="text-center">
-                <p className="text-[15px] text-black">Select a ComfyUI json to upload</p>
-                <p className="text-[13px] text-[#939393] mt-2">or drag and drop it here</p>
-                <p className="text-[13px] text-[#C0C0C0] mt-8">(Must be an API export)</p>
-              </div>
+              <>
+                <div className="text-center">
+                  <p className="text-[15px] text-black">Select a ComfyUI json to upload</p>
+                  <p className="text-[13px] text-[#939393] mt-2">or drag and drop it here</p>
+                </div>
+                <p className="absolute bottom-10 left-0 right-0 text-center text-[13px] text-[#C0C0C0]">(Must be an API export)</p>
+              </>
             )}
           </div>
 
@@ -1230,7 +1242,6 @@ export default function WorkflowWizard() {
                 <div className="space-y-0.5">
                   <p className="text-[#939393]">{dbModels.length} database model{dbModels.length !== 1 ? 's' : ''}</p>
                   <p className="text-[#939393]">{possibleModels.length} possible model{possibleModels.length !== 1 ? 's' : ''}</p>
-                  <p className="text-[#939393]">{unseenLoaders.length} loader{unseenLoaders.length !== 1 ? 's' : ''}</p>
                   <p className="text-[#939393]">{variables.length} variable{variables.length !== 1 ? 's' : ''}</p>
                   <p className="text-[#939393]">{seedNodeIds.length} seed</p>
                 </div>
@@ -1260,7 +1271,7 @@ export default function WorkflowWizard() {
                   </p>
 
                   {m.dbMatch ? (
-                    <div className="mt-4 grid gap-6" style={{ gridTemplateColumns: '1fr 2fr 2fr 2fr' }}>
+                    <div className="mt-4 grid gap-[86px]" style={{ gridTemplateColumns: 'max-content max-content 1fr 1fr' }}>
                       <div>
                         <p className="text-[12px] text-[#939393] mb-1">Category</p>
                         <p className="text-[13px] text-black capitalize">{m.dbMatch.category}</p>
@@ -1316,20 +1327,25 @@ export default function WorkflowWizard() {
                     type="checkbox"
                     checked={p.selected}
                     onChange={(e) => updatePossible(p.key, 'selected', e.target.checked)}
-                    className="mt-1 shrink-0 w-4 h-4 accent-black"
+                    className="mt-1 shrink-0 w-4 h-4 accent-black cursor-pointer"
                   />
                   <div className="flex-1 min-w-0">
                     {!p.selected && (
-                      <p className="text-[15px] font-semibold text-black">{p.fileName || 'New model'}</p>
+                      <p
+                        className="text-[15px] font-semibold text-black cursor-pointer transition-colors hover:text-[#939393]"
+                        onClick={() => updatePossible(p.key, 'selected', !p.selected)}
+                      >
+                        {p.fileName || 'New model'}
+                      </p>
                     )}
                     {p.selected && (
                       <div className="space-y-4">
                         <div>
-                          <label className={CARD_LABEL}>File name <InfoTooltip text="The model filename as referenced in the workflow graph" /></label>
+                          <label className={CARD_LABEL}><span>File name<span className="text-red-500 ml-px">*</span></span> <InfoTooltip text="The model filename as referenced in the workflow graph" /></label>
                           <input className={CARD_INPUT} value={p.fileName} onChange={(e) => updatePossible(p.key, 'fileName', e.target.value)} placeholder="filename.safetensors" />
                         </div>
                         <div>
-                          <label className={CARD_LABEL}>Category <InfoTooltip text="The ComfyUI subfolder where this model is stored" /></label>
+                          <label className={CARD_LABEL}><span>Category<span className="text-red-500 ml-px">*</span></span> <InfoTooltip text="The ComfyUI subfolder where this model is stored" /></label>
                           <SelectInput className={cn(CARD_INPUT, 'cursor-pointer')} value={p.category} onChange={(e) => updatePossible(p.key, 'category', e.target.value)}>
                             {COMFY_MODEL_FOLDERS.map((f) => <option key={f} value={f}>{LOADER_CAT_LABELS[f] ?? f}</option>)}
                           </SelectInput>
@@ -1399,20 +1415,25 @@ export default function WorkflowWizard() {
                           type="checkbox"
                           checked={p.selected}
                           onChange={(e) => updatePossible(p.key, 'selected', e.target.checked)}
-                          className="mt-1 shrink-0 w-4 h-4 accent-black"
+                          className="mt-1 shrink-0 w-4 h-4 accent-black cursor-pointer"
                         />
                         <div className="flex-1 min-w-0">
                           {!p.selected && (
-                            <p className="text-[15px] font-semibold text-black">{p.fileName || 'New model'}</p>
+                            <p
+                              className="text-[15px] font-semibold text-black cursor-pointer transition-colors hover:text-[#939393]"
+                              onClick={() => updatePossible(p.key, 'selected', !p.selected)}
+                            >
+                              {p.fileName || 'New model'}
+                            </p>
                           )}
                           {p.selected && (
                             <div className="space-y-4">
                               <div>
-                                <label className={CARD_LABEL}>File name <InfoTooltip text="The model filename as referenced in the workflow graph" /></label>
+                                <label className={CARD_LABEL}><span>File name<span className="text-red-500 ml-px">*</span></span> <InfoTooltip text="The model filename as referenced in the workflow graph" /></label>
                                 <input className={CARD_INPUT} value={p.fileName} onChange={(e) => updatePossible(p.key, 'fileName', e.target.value)} placeholder="filename.safetensors" />
                               </div>
                               <div>
-                                <label className={CARD_LABEL}>Category <InfoTooltip text="The ComfyUI subfolder where this model is stored" /></label>
+                                <label className={CARD_LABEL}><span>Category<span className="text-red-500 ml-px">*</span></span> <InfoTooltip text="The ComfyUI subfolder where this model is stored" /></label>
                                 <SelectInput className={cn(CARD_INPUT, 'cursor-pointer')} value={p.category} onChange={(e) => updatePossible(p.key, 'category', e.target.value)}>
                                   {COMFY_MODEL_FOLDERS.map((f) => <option key={f} value={f}>{LOADER_CAT_LABELS[f] ?? f}</option>)}
                                 </SelectInput>
@@ -1446,22 +1467,28 @@ export default function WorkflowWizard() {
                     type="checkbox"
                     checked={p.selected}
                     onChange={(e) => updatePossible(p.key, 'selected', e.target.checked)}
-                    className="mt-1 shrink-0 w-4 h-4 accent-black"
+                    className="mt-1 shrink-0 w-4 h-4 accent-black cursor-pointer"
                   />
                   <div className="flex-1 min-w-0">
                     {!p.selected ? (
-                      <>
-                        <p className="text-[15px] font-semibold text-black">{p.nodeTitle || p.fileName}</p>
-                        <p className="text-[12px] text-[#939393] font-mono mt-0.5">{p.fileName}</p>
-                      </>
+                      <div
+                        className="group cursor-pointer"
+                        onClick={() => updatePossible(p.key, 'selected', !p.selected)}
+                      >
+                        <p className="text-[15px] font-semibold text-black transition-colors group-hover:text-[#939393]">{p.nodeTitle || p.fileName}</p>
+                        <p className="text-[12px] text-[#939393] font-mono mt-0.5 transition-colors group-hover:text-[#B0B0B0]">{p.fileName}</p>
+                      </div>
                     ) : (
                       <div className="space-y-4">
-                        <div>
-                          <p className="text-[15px] font-semibold text-black">{p.nodeTitle || p.fileName}</p>
-                          <p className="text-[12px] text-[#939393] font-mono mt-0.5">{p.fileName}</p>
+                        <div
+                          className="group cursor-pointer"
+                          onClick={() => updatePossible(p.key, 'selected', !p.selected)}
+                        >
+                          <p className="text-[15px] font-semibold text-black transition-colors group-hover:text-[#939393]">{p.nodeTitle || p.fileName}</p>
+                          <p className="text-[12px] text-[#939393] font-mono mt-0.5 transition-colors group-hover:text-[#B0B0B0]">{p.fileName}</p>
                         </div>
                         <div>
-                          <label className={CARD_LABEL}>Category <InfoTooltip text="The ComfyUI subfolder where this model is stored" /></label>
+                          <label className={CARD_LABEL}><span>Category<span className="text-red-500 ml-px">*</span></span> <InfoTooltip text="The ComfyUI subfolder where this model is stored" /></label>
                           <SelectInput className={cn(CARD_INPUT, 'cursor-pointer')} value={p.category} onChange={(e) => updatePossible(p.key, 'category', e.target.value)}>
                             {COMFY_MODEL_FOLDERS.map((f) => <option key={f} value={f}>{LOADER_CAT_LABELS[f] ?? f}</option>)}
                           </SelectInput>
@@ -1514,22 +1541,25 @@ export default function WorkflowWizard() {
                 </div>
 
                 <div className="mb-4">
-                  <label className={CARD_LABEL}>Variable name <InfoTooltip text="Human-readable label shown when running this workflow" /></label>
+                  <label className={CARD_LABEL}><span>Variable name<span className="text-red-500 ml-px">*</span></span> <InfoTooltip text="Human-readable label shown when running this workflow" /></label>
                   <input className={CARD_INPUT} value={v.name} onChange={(e) => updateVar(idx, 'name', e.target.value)} placeholder="e.g. Adherence" />
                 </div>
 
                 {(v.type === 'int' || v.type === 'float') && (
-                  <div className="grid grid-cols-2 gap-4 mb-4">
-                    <div><label className={CARD_LABEL}>Default <InfoTooltip text="Starting value when the workflow is loaded" /></label><input className={CARD_INPUT} value={v.default} onChange={(e) => updateVar(idx, 'default', e.target.value)} /></div>
-                    <div><label className={CARD_LABEL}>Min <InfoTooltip text="Minimum allowed value" /></label><input className={CARD_INPUT} value={v.min} onChange={(e) => updateVar(idx, 'min', e.target.value)} /></div>
-                    <div><label className={CARD_LABEL}>Max <InfoTooltip text="Maximum allowed value" /></label><input className={CARD_INPUT} value={v.max} onChange={(e) => updateVar(idx, 'max', e.target.value)} /></div>
-                    <div><label className={CARD_LABEL}>Step <InfoTooltip text="Increment between selectable values" /></label><input className={CARD_INPUT} value={v.step} onChange={(e) => updateVar(idx, 'step', e.target.value)} /></div>
+                  <div className="grid grid-cols-3 gap-4 mb-4">
+                    <div><label className={CARD_LABEL}><span>Default<span className="text-red-500 ml-px">*</span></span> <InfoTooltip text="Starting value when the workflow is loaded" /></label><input className={CARD_INPUT} value={v.default} onChange={(e) => updateVar(idx, 'default', e.target.value)} /></div>
+                    <div className="flex items-end gap-2">
+                      <div className="flex-1 min-w-0"><label className={CARD_LABEL}><span>Min<span className="text-red-500 ml-px">*</span></span> <InfoTooltip text="Minimum allowed value" /></label><input className={CARD_INPUT} value={v.min} onChange={(e) => updateVar(idx, 'min', e.target.value)} /></div>
+                      <span className="text-[#939393] text-[13px] pb-2.5">–</span>
+                      <div className="flex-1 min-w-0"><label className={CARD_LABEL}><span>Max<span className="text-red-500 ml-px">*</span></span> <InfoTooltip text="Maximum allowed value" /></label><input className={CARD_INPUT} value={v.max} onChange={(e) => updateVar(idx, 'max', e.target.value)} /></div>
+                    </div>
+                    <div><label className={CARD_LABEL}><span>Step<span className="text-red-500 ml-px">*</span></span> <InfoTooltip text="Increment between selectable values" /></label><input className={CARD_INPUT} value={v.step} onChange={(e) => updateVar(idx, 'step', e.target.value)} /></div>
                   </div>
                 )}
 
                 <div>
                   <label className={CARD_LABEL}>Description <InfoTooltip text="Explanation of what this variable controls, shown in the Rhino Plugin" /></label>
-                  <input className={CARD_INPUT} value={v.description} onChange={(e) => updateVar(idx, 'description', e.target.value)} placeholder="Shown in Rhino Plugin" />
+                  <input className={CARD_INPUT} value={v.description} onChange={(e) => updateVar(idx, 'description', e.target.value)} placeholder="e.g. For adjusting the softness of the output" />
                 </div>
               </div>
             ))}
@@ -1564,12 +1594,12 @@ export default function WorkflowWizard() {
               <p className="text-[13px] font-semibold text-black mb-4">Workflow Details</p>
               <div className="space-y-4">
                 <div>
-                  <label className={CARD_LABEL}>Workflow name <InfoTooltip text="Name shown in the Rhino Plugin workflow browser" /></label>
+                  <label className={CARD_LABEL}><span>Workflow name<span className="text-red-500 ml-px">*</span></span> <InfoTooltip text="Name shown in the Rhino Plugin workflow browser" /></label>
                   <input className={CARD_INPUT} value={workflowName} onChange={(e) => setWorkflowName(e.target.value)} placeholder="e.g. Juggernaut" />
                 </div>
                 <div>
                   <label className={CARD_LABEL}>Description <InfoTooltip text="Explanation of what this variable controls, shown in the Rhino Plugin" /></label>
-                  <input className={CARD_INPUT} value={description} onChange={(e) => setDescription(e.target.value)} placeholder="Shown in Rhino Plugin" />
+                  <input className={CARD_INPUT} value={description} onChange={(e) => setDescription(e.target.value)} placeholder="e.g. Generates product photography with soft studio lighting" />
                 </div>
                 <div>
                   <label className={CARD_LABEL}>Thumbnail <InfoTooltip text="Preview image shown in the workflow gallery" /></label>
