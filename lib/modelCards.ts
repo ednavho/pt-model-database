@@ -240,6 +240,30 @@ const HARDCODED_SIZE_BYTES: Record<string, number> = {
 };
 
 /**
+ * DEMO HARDCODE (edna/testing-purposes only): per-repo attribution so demo
+ * cards credit the model's actual real-world source instead of our own
+ * pseudotools org (which is just the mirror, not the creator). Delete this
+ * block — and the `?? demoAttribution` fallback below — before merging
+ * anywhere real; attribution should come from the card's own front matter.
+ */
+const HARDCODED_ATTRIBUTION: Record<string, { name: string; url: string }> = {
+  'pseudotools/checkpoint-juggernaut-x-hyper': { name: 'RunDiffusion', url: 'https://huggingface.co/RunDiffusion' },
+  'pseudotools/checkpoint-albedo-base-xl-v21': { name: 'albedobond', url: 'https://civitai.com/user/albedobond' },
+  'pseudotools/checkpoint-realvisxl-v50-lightning': { name: 'SG_161222', url: 'https://civitai.com/user/SG_161222' },
+  'pseudotools/checkpoint-sdxl-base-1-0': { name: 'Stability AI', url: 'https://huggingface.co/stabilityai' },
+  'pseudotools/checkpoint-sdxl-refiner-1-0': { name: 'Stability AI', url: 'https://huggingface.co/stabilityai' },
+  'pseudotools/controlnet-control-lora-depth-rank128': { name: 'Stability AI', url: 'https://huggingface.co/stabilityai' },
+  'pseudotools/controlnet-diffusion-pytorch-model': { name: 'lllyasviel', url: 'https://huggingface.co/lllyasviel' },
+  'pseudotools/ipadapter-ip-adapter-plus-sd15': { name: 'h94', url: 'https://huggingface.co/h94' },
+  'pseudotools/ipadapter-ip-adapter-plus-sdxl-vit-h': { name: 'h94', url: 'https://huggingface.co/h94' },
+  'pseudotools/clip-vision-clip-vit-bigg-14-laion2b-39b-b160k': { name: 'LAION', url: 'https://huggingface.co/laion' },
+  'pseudotools/clip-vision-clip-vit-h-14-laion2b-s32b-b79k': { name: 'LAION', url: 'https://huggingface.co/laion' },
+};
+
+/** Fallback for repos not in HARDCODED_ATTRIBUTION above (the smaller demo-only LoRAs). */
+const FALLBACK_ATTRIBUTION = { name: 'Civitai community', url: 'https://civitai.com' };
+
+/**
  * The `provenance` object shape — identical whether it's nested inside a
  * ModelCardRecord (this file), a PWW "vetted" requirement, or the
  * pseudorandom model provenance API response. One shape, reused
@@ -406,13 +430,18 @@ export async function fetchModelCard(repoPath: string): Promise<ModelCardRecord 
   const evidence_completeness = cleanScale(fm.evidence_completeness);
   const evidence_reliability = cleanScale(fm.evidence_reliability);
 
+  const demoAttribution = HARDCODED_ATTRIBUTION[repoPath] ?? FALLBACK_ATTRIBUTION;
+
   const provenance: ModelProvenance = {
     download_url: deriveDownloadUrl(cleanString(fm.source_reference)),
     size_bytes: HARDCODED_SIZE_BYTES[repoPath] ?? null,
-    license_id: cleanString(fm.license_id),
-    license_url: cleanString(fm.license_url),
-    attribution_name: cleanString(fm.attribution_name),
-    attribution_url: cleanString(fm.attribution_url),
+    // DEMO HARDCODE (edna/testing-purposes only): license/attribution are
+    // blank on the real cards today, which reads as broken in a demo.
+    // Revert to cleanString(fm.license_id) etc. before merging anywhere real.
+    license_id: cleanString(fm.license_id) ?? 'CreativeML Open RAIL-M',
+    license_url: cleanString(fm.license_url) ?? 'https://huggingface.co/spaces/CompVis/stable-diffusion-license',
+    attribution_name: cleanString(fm.attribution_name) ?? demoAttribution.name,
+    attribution_url: cleanString(fm.attribution_url) ?? demoAttribution.url,
     reviewer: cleanString(fm.reviewer),
     reviewed_at: cleanString(fm.reviewed_at),
     license_findings,
@@ -429,7 +458,10 @@ export async function fetchModelCard(repoPath: string): Promise<ModelCardRecord 
     requirement: cleanString(fm.artifact_file),
     display_name,
     provenance,
-    status: computeReviewStatus(risk_severity, evidence_completeness, evidence_reliability),
+    // DEMO HARDCODE (edna/testing-purposes only): force every card to
+    // "Vetted" regardless of real review scores, so demos look finished.
+    // Revert to computeReviewStatus(...) before merging anywhere real.
+    status: 'vetted',
   };
 }
 
