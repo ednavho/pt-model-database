@@ -99,25 +99,29 @@ const LEGEND: { type: string; label: string }[] = [
   { type: 'person', label: 'People' },
 ];
 
+// Mirrors the actual node rendering (solid fill in the type colour, white
+// icon strokes on top; unverified nodes swap to a white fill with a dashed
+// coloured ring) — a thin colour-stroked outline on transparent background
+// reads as noticeably brighter than a solid fill of the same hex value, so
+// matching the node style is what actually makes the legend colours read
+// as "the same" rather than just technically equal.
 function TypeIcon({ type, dashed = false }: { type: string; dashed?: boolean }) {
   return (
     <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true">
-      {dashed && (
-        <circle
-          cx="12"
-          cy="12"
-          r="11"
-          fill="none"
-          stroke="#a1a1aa"
-          strokeWidth="1.2"
-          strokeDasharray="3,2"
-        />
-      )}
+      <circle
+        cx="12"
+        cy="12"
+        r="11"
+        fill={dashed ? '#fff' : TYPE_COLORS[type]}
+        stroke={TYPE_COLORS[type]}
+        strokeWidth={dashed ? 1.2 : 0}
+        strokeDasharray={dashed ? '3,2' : undefined}
+      />
       {TYPE_ICONS[type] && (
         <path
           d={TYPE_ICONS[type]}
           fill="none"
-          stroke={TYPE_COLORS[type]}
+          stroke={dashed ? TYPE_COLORS[type] : '#fff'}
           strokeWidth="1.6"
           strokeLinecap="round"
           strokeLinejoin="round"

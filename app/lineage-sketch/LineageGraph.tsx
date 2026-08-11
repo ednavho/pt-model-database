@@ -201,7 +201,7 @@ function popupHtml(node: LineageNode): string {
   // so both places signal "this opens something" the same way.
   const linksHtml =
     allLinks.length > 0
-      ? `<div style="margin-top:6px;padding-top:5px;border-top:1px solid #e4e4e7;display:flex;flex-wrap:wrap;gap:4px 8px">
+      ? `<div style="margin-top:9px;padding-top:8px;border-top:1px solid #e4e4e7;display:flex;flex-wrap:wrap;gap:4px 8px">
           ${allLinks
             .map(
               (l) =>
@@ -211,8 +211,10 @@ function popupHtml(node: LineageNode): string {
         </div>`
       : '';
 
-  const dateLine = node.date
-    ? `<div style="font-size:9px;font-weight:400;color:#71717a;margin-bottom:4px">${node.date}</div>`
+  // Right-aligned on the title row (not its own line below) — same
+  // baseline as the name, per the redesigned card layout.
+  const dateHtml = node.date
+    ? `<span style="font-size:9px;font-weight:400;color:#71717a;margin-left:auto;padding-left:8px;flex-shrink:0">${node.date}</span>`
     : '';
 
   return `
@@ -221,10 +223,10 @@ function popupHtml(node: LineageNode): string {
         <span style="width:6px;height:6px;border-radius:9999px;background:${color};display:inline-block;flex-shrink:0"></span>
         <span style="font-size:11px;font-weight:600;color:#18181b">${node.label}</span>
         ${badge}
+        ${dateHtml}
       </div>
-      ${dateLine}
       <p style="margin:0;font-size:10px;font-weight:400;line-height:1.4;color:#3f3f46">${desc}</p>
-      <div id="lg-usage" style="margin-top:6px;font-size:10px;font-weight:400;line-height:1.4;color:#3f3f46"></div>
+      <div id="lg-usage" style="font-size:10px;font-weight:400;line-height:1.4;color:#3f3f46"></div>
       ${linksHtml}
     </div>`;
 }
@@ -267,6 +269,10 @@ export default function LineageGraph({
   const selectedRef = useRef<string | null>(null);
   const onToggleRef = useRef(onToggle);
   onToggleRef.current = onToggle;
+  /** The node id most recently clicked to expand/collapse — the point
+   *  collapsing children should visually "suck back into" in
+   *  playNodeTransition(), rather than just shrinking wherever they stood. */
+  const lastToggledIdRef = useRef<string | null>(null);
 
   const index = useMemo(() => buildIndex(allNodes, allLinks), [allNodes, allLinks]);
 
@@ -423,6 +429,9 @@ export default function LineageGraph({
 
       // Handle for the fit-in tween (see fitToView below), stopped on cleanup.
       let fitAnimTimer: d3.Timer | null = null;
+      // Handle for the expand/collapse "impact" pulse (see playNodeTransition
+      // below), stopped on cleanup.
+      let impactTimer: d3.Timer | null = null;
 
       // ── SVG scaffold ──────────────────────────────────────────────────────
       const defs = svg.append('defs');
@@ -440,9 +449,13 @@ export default function LineageGraph({
       }
 
       const root = svg.append('g');
-      const hullLayer = root.append('g');
-      const linkLayer = root.append('g');
-      const nodeLayer = root.append('g');
+      // A separate group from root itself so the expand/collapse "impact"
+      // pulse (a transform on this group) can't fight the pan/zoom
+      // transform that lives on root.
+      const contentLayer = root.append('g');
+      const hullLayer = contentLayer.append('g');
+      const linkLayer = contentLayer.append('g');
+      const nodeLayer = contentLayer.append('g');
 
 
       const zoom = d3
@@ -523,6 +536,31 @@ export default function LineageGraph({
         }
       }
 
+      // ── Show timer for popup hover-stay ───────────────────────────────────
+      // The card only appears after the pointer has rested on a node for a
+      // beat — a hover that's just passing through on the way to somewhere
+      // else shouldn't pop a card. Any unhover before the delay elapses
+      // cancels it outright rather than pausing/resuming it.
+      const HOVER_SHOW_DELAY = 1000;
+      let showTimer: ReturnType<typeof setTimeout> | null = null;
+
+      function scheduleShow(id: string) {
+        clearShowTimer();
+        showTimer = setTimeout(() => {
+          showTimer = null;
+          cancelHide();
+          selectedRef.current = id;
+          updatePopup();
+        }, HOVER_SHOW_DELAY);
+      }
+
+      function clearShowTimer() {
+        if (showTimer !== null) {
+          clearTimeout(showTimer);
+          showTimer = null;
+        }
+      }
+
       const node = nodeLayer
         .selectAll<SVGGElement, SimNode>('g')
         .data(nodes, (d) => d.id)
@@ -534,16 +572,17 @@ export default function LineageGraph({
           // dismiss immediately rather than waiting out the hover-grace
           // delay scheduleHide() uses for "moving toward the card" hovers.
           cancelHide();
+          clearShowTimer();
           selectedRef.current = null;
           updatePopup();
+          lastToggledIdRef.current = d.id;
           onToggleRef.current(d.id);
         })
         .on('mouseenter', (_event, d) => {
-          cancelHide();
-          selectedRef.current = d.id;
-          updatePopup();
+          scheduleShow(d.id);
         })
         .on('mouseleave', () => {
+          clearShowTimer();
           scheduleHide();
         });
 
@@ -689,8 +728,8 @@ export default function LineageGraph({
         const usageEl = popupBody.select<HTMLDivElement>('#lg-usage');
         usageEl.html(
           usage.length
-            ? `<div style="font-weight:400;color:#71717a;margin-bottom:6px">In this render:</div>${usage
-                .map((u, i) => `<div style="${i > 0 ? 'margin-top:8px' : ''}">${u}</div>`)
+            ? `<div style="margin-top:9px;padding-top:9px;border-top:1px solid #e4e4e7;font-weight:400;color:#71717a;margin-bottom:6px">In this render:</div>${usage
+                .map((u, i) => `<div style="${i > 0 ? 'margin-top:4px' : ''}">${u}</div>`)
                 .join('')}`
             : ''
         );
@@ -1050,13 +1089,41 @@ export default function LineageGraph({
        * abruptly. Links glide along with whichever endpoint moved.
        */
       function playNodeTransition() {
-        const duration = 520;
-        // A soft spring, not a plain deceleration — overshoots the target
-        // slightly then settles back, which is what actually reads as
-        // "popping out gently" rather than just easing to a stop. 1.4 is a
-        // notch below d3's default overshoot (~1.7) to keep it gentle
-        // rather than bouncy.
-        const spring = d3.easeBackOut.overshoot(1.4);
+        // The whole graph flinches from the click, not just the nodes that
+        // are actually entering/leaving — a quick compress-and-recoil
+        // pulse on contentLayer, anchored at the toggled node so it reads
+        // as "the force of that click rippled outward" instead of the
+        // rest of the graph sitting stiff while only the affected nodes
+        // move. One overshoot, not an elastic wobble — the individual
+        // nodes below already supply the bounce, this just needs to sell
+        // the impact.
+        const toggledNode = lastToggledIdRef.current
+          ? nodes.find((n) => n.id === lastToggledIdRef.current)
+          : null;
+        const impactOrigin = {
+          x: toggledNode?.x ?? width / 2,
+          y: toggledNode?.y ?? height / 2,
+        };
+        const impactTransform = (s: number) =>
+          `translate(${impactOrigin.x},${impactOrigin.y}) scale(${s}) translate(${-impactOrigin.x},${-impactOrigin.y})`;
+        const impactDuration = 320;
+        const impactStartScale = 0.975;
+        const impactEase = d3.easeBackOut.overshoot(1.15);
+        impactTimer?.stop();
+        impactTimer = d3.timer((elapsed) => {
+          const t = Math.min(1, elapsed / impactDuration);
+          const s = impactStartScale + (1 - impactStartScale) * impactEase(t);
+          contentLayer.attr('transform', impactTransform(s));
+          if (t >= 1) impactTimer?.stop();
+        });
+
+        const duration = 600;
+        // A genuine elastic spring — overshoots and wobbles back before
+        // settling, which reads as an actual "boing" the way the original
+        // force graph's live physics did, rather than the single gentle
+        // overshoot a plain backOut ease gives. A tight 0.4 period keeps
+        // the wobble snappy instead of loose/floaty.
+        const spring = d3.easeElastic.amplitude(1).period(0.4);
 
         node
           .attr('transform', (d) => {
@@ -1097,8 +1164,17 @@ export default function LineageGraph({
           .attr('y2', (d) => finalPosOf(d.target as SimNode).y)
           .attr('opacity', 1);
 
+        // Collapsing children should read as sucking back into whatever
+        // node was just clicked — quick and decisive, not a slow fade in
+        // place. A short duration with an accelerating ease-in is what
+        // makes it feel like a snap-implosion instead of a lingering
+        // disappearance; a longer/gentler curve was the actual complaint.
         const exitingIds = [...previousVisible].filter((id) => !visible.has(id));
         if (exitingIds.length > 0) {
+          const collapseTarget = lastToggledIdRef.current ? finalPosOf(lastToggledIdRef.current) : null;
+          const suckDuration = 180;
+          const suckEase = d3.easeCubicIn;
+
           const ghosts = root
             .append('g')
             .attr('pointer-events', 'none')
@@ -1113,7 +1189,16 @@ export default function LineageGraph({
             })
             .attr('fill', (id) => TYPE_COLORS[index.nodeById.get(id)?.type ?? 'model'])
             .attr('opacity', 0.85);
-          ghosts.transition().duration(duration).ease(d3.easeCubicIn).attr('opacity', 0).attr('r', 2).remove();
+
+          ghosts
+            .transition()
+            .duration(suckDuration)
+            .ease(suckEase)
+            .attr('cx', (id) => collapseTarget?.x ?? posRef.current.get(id)?.x ?? width / 2)
+            .attr('cy', (id) => collapseTarget?.y ?? posRef.current.get(id)?.y ?? height / 2)
+            .attr('opacity', 0)
+            .attr('r', 0)
+            .remove();
         }
       }
 
@@ -1151,7 +1236,7 @@ export default function LineageGraph({
           })
       );
 
-      return () => { sim.stop(); fitAnimTimer?.stop(); };
+      return () => { sim.stop(); fitAnimTimer?.stop(); impactTimer?.stop(); cancelHide(); clearShowTimer(); };
     },
     [index, allLinks, expanded, rootId, layout, imageUrl, imageDimensions, showLinkLabels, linkPhrase]
   );

@@ -95,23 +95,17 @@ export default function ModelsList({
             className="border border-[#E9E9E9] rounded-[8px] pl-8 pr-3 py-[7px] text-[14px] outline-none focus:border-[#B0B0B0] bg-white w-full transition-colors"
           />
         </div>
-        <Link
-          href="/models/new"
-          className="shrink-0 text-[13px] border border-[#E9E9E9] rounded-[8px] px-3 py-[7px] text-zinc-700 hover:border-zinc-400 transition-colors"
-        >
-          + Add Model
-        </Link>
       </div>
 
       <div className="border border-[#E9E9E9] rounded-[8px] overflow-x-auto">
         <table className="w-full text-sm table-fixed">
           <colgroup>
-            <col className="w-[30%]" />
-            <col className="w-[12%]" />
-            <col className="w-[15%]" />
-            <col className="w-[20%]" />
-            <col className="w-[13%]" />
+            <col className="w-[35%]" />
+            <col className="w-[14%]" />
+            <col className="w-[14%]" />
+            <col className="w-[25%]" />
             <col className="w-[10%]" />
+            <col className="w-[12%]" />
           </colgroup>
           <thead>
             <tr className="border-b border-[#E9E9E9]">
@@ -119,7 +113,7 @@ export default function ModelsList({
                 <th
                   key={col}
                   className={cn(
-                    'text-[14px] font-medium text-black px-4 py-3',
+                    'text-[14px] font-medium text-black px-4 py-3 whitespace-nowrap',
                     col === 'Download' ? 'text-center' : 'text-left'
                   )}
                 >
@@ -141,29 +135,29 @@ export default function ModelsList({
                   <td className="px-4 py-3 overflow-hidden">
                     <Link
                       href={`/models/${model.record_id}`}
-                      className="font-medium text-black hover:underline block truncate text-[13px]"
+                      className="text-black hover:underline block truncate text-[14px]"
                     >
                       {model.display_name}
                     </Link>
                     {model.requirement && (
-                      <span className="block truncate text-[12px] font-mono" style={{ color: '#939393' }}>
+                      <span className="block truncate text-[11px] font-mono" style={{ color: '#939393' }}>
                         {model.requirement}
                       </span>
                     )}
                   </td>
-                  <td className="px-4 py-3 text-[13px] text-zinc-600">
+                  <td className="px-4 py-3 text-[13px] text-zinc-600 truncate">
                     {model.category ? categoryLabel(model.category) : '—'}
                   </td>
-                  <td className="px-4 py-3">
+                  <td className="px-4 py-3 overflow-hidden">
                     <RiskBadge record={model} />
                   </td>
                   <td className="px-4 py-3 text-[13px] text-zinc-500 truncate" title={model.provenance.license_id ?? undefined}>
                     {model.provenance.license_id ?? '—'}
                   </td>
-                  <td className="px-4 py-3 text-[13px] text-zinc-500">
+                  <td className="px-4 py-3 text-[13px] text-zinc-500 whitespace-nowrap">
                     {formatBytes(model.provenance.size_bytes)}
                   </td>
-                  <td className="px-4 py-3 text-center">
+                  <td className="px-4 py-3 text-center whitespace-nowrap">
                     {model.provenance.download_url ? (
                       <a
                         href={model.provenance.download_url}

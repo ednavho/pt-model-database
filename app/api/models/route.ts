@@ -1,7 +1,8 @@
 /**
  * GET /api/models — list vetted models from the pseudotools Hugging Face org
- *   ?category=checkpoint  (optional filter — singular, matches the repo's
- *                          HF tag directly, e.g. "checkpoint" not "checkpoints")
+ *   ?category=checkpoints  (optional filter — matches the canonical category
+ *                           value from CATEGORY_TAG_MAP, e.g. "checkpoints",
+ *                           "controlnet", "clip_vision", "ipadapter", "loras")
  *
  * Model provenance now lives one Hugging Face repo per model (see
  * lib/modelCards.ts) instead of the Supabase `models` table. This endpoint

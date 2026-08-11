@@ -1,13 +1,14 @@
-import ModelProvenanceCard from '@/components/ui/ModelProvenanceCard';
-import RiskBadge from '@/components/ui/RiskBadge';
+/** @format */
+
 import {
   EMPTY_PROVENANCE,
   REVIEW_STATUS_META,
   computeWorkflowStatus,
   fetchModelCard,
+  formatBytes,
   type ModelCardRecord,
   type ModelProvenance,
-  type WorkflowStatusSummary,
+  type ReviewStatus,
 } from '@/lib/modelCards';
 import { cn } from '@/utils/cn';
 
@@ -31,9 +32,16 @@ import { cn } from '@/utils/cn';
  * still genuinely unconfirmed is how the plugin delivers this link (the
  * generation mechanism doesn't exist yet) — not the document shape itself.
  *
- * `riskTolerance` is accepted and threaded through so the plugin's setting
- * has somewhere to land, but nothing here is tolerance-driven yet — no
- * thresholds, no filtering. That behavior hasn't been specified.
+ * `riskTolerance` is accepted in the query-param contract so the plugin's
+ * setting has somewhere to land, but nothing here is tolerance-driven yet
+ * — no thresholds, no filtering, no display. That behavior hasn't been
+ * specified.
+ *
+ * ── Card/badge styling ────────────────────────────────────────────────────
+ * The redesign's requirement cards and badges are kept page-local (not
+ * folded into components/ui/ModelProvenanceCard.tsx / RiskBadge.tsx) since
+ * those are still shared with app/image-info/ImageInfoViewer.tsx, which
+ * this redesign doesn't touch.
  */
 
 type WorkflowAttribution = {
@@ -42,7 +50,12 @@ type WorkflowAttribution = {
   license: string | null;
 };
 
-type GlobalGuidanceCapabilities = { txt_scene: boolean; txt_style: boolean; txt_negative: boolean; img_style: boolean };
+type GlobalGuidanceCapabilities = {
+  txt_scene: boolean;
+  txt_style: boolean;
+  txt_negative: boolean;
+  img_style: boolean;
+};
 type RegionalGuidanceCapabilities = { text: boolean; image: boolean };
 type SpatialGuidanceCapabilities = { depth: boolean; edge: boolean };
 
@@ -104,7 +117,9 @@ type ResolvedRequirement = {
   recordId: string | null;
 };
 
-async function resolveEntry(entry: WorkflowRequirementInput): Promise<ResolvedRequirement> {
+async function resolveEntry(
+  entry: WorkflowRequirementInput,
+): Promise<ResolvedRequirement> {
   const isExtension = entry.category === 'custom_nodes';
 
   if (entry.record_id) {
@@ -151,10 +166,48 @@ async function resolveEntry(entry: WorkflowRequirementInput): Promise<ResolvedRe
   };
 }
 
+/** Shared pill shape for StatusPill and the manual-entry "Review Pending"
+ *  badge, so the two visually match — just different colors/label. */
+function Pill({
+  className,
+  children,
+}: {
+  className: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <span
+      className={cn(
+        'inline-flex items-center px-[6px] py-[4px] text-[11px] font-medium border rounded-[6px] opacity-80 whitespace-nowrap',
+        className,
+      )}
+    >
+      {children}
+    </span>
+  );
+}
+
+/** Tighter pill than components/ui/RiskBadge.tsx's, sized to sit inline
+ *  next to the workflow title as well as on a requirement card. Reuses
+ *  REVIEW_STATUS_META's colors so the semantics (and the palette) stay
+ *  identical to the shared badge. */
+function StatusPill({ status }: { status: ReviewStatus }) {
+  const meta = REVIEW_STATUS_META[status];
+  return <Pill className={meta.className}>{meta.label}</Pill>;
+}
+
 function badgeFor(req: ResolvedRequirement): React.ReactNode {
   if (req.isExtension) return null;
-  if (req.card) return <RiskBadge record={{ status: req.card.status }} />;
-  if (req.isManual) return <span className="text-[11px] text-[#939393] italic">Manually added, not reviewed</span>;
+  if (req.card) return <StatusPill status={req.card.status} />;
+  // Grey, like REVIEW_STATUS_META's 'unknown' pill — a manual entry has no
+  // record to review in the first place, which reads the same as "not yet
+  // reviewed" here.
+  if (req.isManual)
+    return (
+      <Pill className="bg-zinc-50 text-zinc-500 border-zinc-200">
+        Review Pending
+      </Pill>
+    );
   return null; // record_id given but unresolved — emptyMessageFor() already explains it
 }
 
@@ -163,95 +216,68 @@ function emptyMessageFor(req: ResolvedRequirement): string | null {
   return `record_id "${req.recordId}" was not found in the model database.`;
 }
 
-/** "5 of 6 requirements have a review record — 4 assessed, 1 pending review — 1 not in the database." */
-function breakdownSentence(summary: WorkflowStatusSummary): string {
-  const withRecord = summary.verdictCount + summary.pendingReviewCount;
-  const recordClause = `${withRecord} of ${summary.total} requirement${summary.total === 1 ? '' : 's'} ${withRecord === 1 ? 'has' : 'have'} a review record`;
-
-  const parts: string[] = [];
-  if (summary.verdictCount > 0) parts.push(`${summary.verdictCount} assessed`);
-  if (summary.pendingReviewCount > 0) parts.push(`${summary.pendingReviewCount} pending review`);
-  const assessedClause = parts.length > 0 ? ` — ${parts.join(', ')}` : '';
-
-  const missingClause = summary.notInDatabaseCount > 0 ? ` — ${summary.notInDatabaseCount} not in the database` : '';
-
-  return `${recordClause}${assessedClause}${missingClause}.`;
-}
-
-function WorkflowStatusBanner({
-  summary,
-  riskTolerance,
-}: {
-  summary: WorkflowStatusSummary;
-  riskTolerance: string | null;
-}) {
-  const meta = REVIEW_STATUS_META[summary.status];
-  const copy =
-    summary.verdictCount === 0
-      ? 'No models in this workflow have completed review yet.'
-      : breakdownSentence(summary);
-
-  return (
-    <div className="mb-8">
-      <div className="flex items-center gap-2 mb-2">
-        {summary.notInDatabaseCount > 0 && (
-          <span className="inline-flex items-center px-2.5 py-1 text-[13px] border rounded-[8px] font-medium bg-amber-50 text-amber-700 border-amber-200">
-            {summary.notInDatabaseCount} not in database
-          </span>
-        )}
-        <span className={cn('inline-flex items-center px-2.5 py-1 text-[13px] border rounded-[8px] font-medium', meta.className)}>
-          {meta.label}
-        </span>
-      </div>
-      <p className="text-[13px] text-black">{copy}</p>
-      {riskTolerance && (
-        // Placeholder — accepted and displayed so the plugin's setting has
-        // somewhere to land, but nothing on this page reacts to it yet.
-        <p className="text-[12px] text-[#C0C0C0] mt-1">Risk tolerance (not yet used on this page): {riskTolerance}</p>
-      )}
-    </div>
-  );
-}
-
 const CAPABILITY_GROUPS = (doc: PseudorandomWorkflowDocument) => [
   {
     title: 'Global Guidance',
     items: [
-      { label: 'Scene Text', used: !!doc.global_guidance_capabilities?.txt_scene },
-      { label: 'Style Text', used: !!doc.global_guidance_capabilities?.txt_style },
-      { label: 'Negative Text', used: !!doc.global_guidance_capabilities?.txt_negative },
-      { label: 'Style Image', used: !!doc.global_guidance_capabilities?.img_style },
+      {
+        label: 'Scene Text',
+        used: !!doc.global_guidance_capabilities?.txt_scene,
+      },
+      {
+        label: 'Style Text',
+        used: !!doc.global_guidance_capabilities?.txt_style,
+      },
+      {
+        label: 'Negative Text',
+        used: !!doc.global_guidance_capabilities?.txt_negative,
+      },
+      {
+        label: 'Style Image',
+        used: !!doc.global_guidance_capabilities?.img_style,
+      },
     ],
   },
   {
     title: 'Regional Guidance',
     items: [
-      { label: 'Regional Text', used: !!doc.regional_guidance_capabilities?.text },
-      { label: 'Regional Image', used: !!doc.regional_guidance_capabilities?.image },
+      {
+        label: 'Regional Text',
+        used: !!doc.regional_guidance_capabilities?.text,
+      },
+      {
+        label: 'Regional Image',
+        used: !!doc.regional_guidance_capabilities?.image,
+      },
     ],
   },
   {
     title: 'Spatial Guidance',
     items: [
-      { label: 'Spatial Depth', used: !!doc.spatial_guidance_capabilities?.depth },
-      { label: 'Spatial Edge', used: !!doc.spatial_guidance_capabilities?.edge },
+      {
+        label: 'Spatial Depth',
+        used: !!doc.spatial_guidance_capabilities?.depth,
+      },
+      {
+        label: 'Spatial Edge',
+        used: !!doc.spatial_guidance_capabilities?.edge,
+      },
     ],
   },
 ];
 
 function CapabilitiesSection({ doc }: { doc: PseudorandomWorkflowDocument }) {
   return (
-    <div className="pl-5 space-y-4">
+    <div className="flex flex-col gap-6">
       {CAPABILITY_GROUPS(doc).map((group) => (
-        <div key={group.title}>
-          <p className="text-[12px] text-[#939393] mb-2">{group.title}</p>
-          <div className="flex flex-wrap gap-x-5 gap-y-2">
+        <div key={group.title} className="flex flex-col gap-2">
+          <p className="text-[14px] text-[#939393] w-[120px]">{group.title}</p>
+          <div className="flex flex-wrap gap-x-8 gap-y-2 pl-4 text-[14px]">
             {group.items.map((item) => (
               <span
                 key={item.label}
-                className={cn('flex items-center gap-1.5 text-[13px]', item.used ? 'text-black font-medium' : 'text-[#C0C0C0]')}
+                className={item.used ? 'text-black' : 'text-[#939393]'}
               >
-                <span className={cn('w-1.5 h-1.5 rounded-full shrink-0', item.used ? 'bg-black' : 'bg-[#E9E9E9]')} />
                 {item.label}
               </span>
             ))}
@@ -265,19 +291,151 @@ function CapabilitiesSection({ doc }: { doc: PseudorandomWorkflowDocument }) {
 function VariableCard({ v }: { v: WorkflowVariable }) {
   const isNumeric = v.type === 'int' || v.type === 'float';
   return (
-    <div className="border border-[#E9E9E9] rounded-[8px] p-5">
-      <div className="flex items-center gap-2 mb-1">
-        <p className="text-[15px] font-semibold text-black">{v.name || '(unnamed variable)'}</p>
-        <span className="text-[11px] text-[#939393] border border-[#E9E9E9] rounded-[6px] px-1.5 py-0.5">{v.type}</span>
+    <div className="border border-[#ededed] rounded-[8px] p-[16px] flex flex-col gap-4">
+      <div className="flex flex-col gap-2">
+        <div className="flex items-center gap-3">
+          <p className="text-[14px] font-semibold text-black">
+            {v.name || '(unnamed variable)'}
+          </p>
+          <span className="text-[12px] text-[#939393] border border-[#e8e8e8] rounded-[6px] px-[6px] py-[4px] opacity-80">
+            {v.type}
+          </span>
+        </div>
+        {v.description && (
+          <p className="text-[14px] text-black">{v.description}</p>
+        )}
       </div>
-      <p className="text-[12px] text-[#939393] font-mono mb-2">binds_to: {v.binds_to}</p>
-      {v.description && <p className="text-[13px] text-black mb-3">{v.description}</p>}
-      <div className="flex flex-wrap gap-x-5 gap-y-1 text-[12px] text-[#939393]">
-        <span>default: {String(v.default)}</span>
-        {isNumeric && v.min !== undefined && <span>min: {v.min}</span>}
-        {isNumeric && v.max !== undefined && <span>max: {v.max}</span>}
-        {isNumeric && v.step !== undefined && <span>step: {v.step}</span>}
+      <div className="flex flex-wrap gap-4 text-[12px] text-[#939393]">
+        <span>Default: {String(v.default)}</span>
+        {isNumeric && v.min !== undefined && <span>Min: {v.min}</span>}
+        {isNumeric && v.max !== undefined && <span>Max: {v.max}</span>}
+        {isNumeric && v.step !== undefined && <span>Step: {v.step}</span>}
       </div>
+    </div>
+  );
+}
+
+/** The small external-link arrow used on Source/Download rows — copied
+ *  inline from the Figma asset rather than fetched at runtime, since the
+ *  Figma-hosted asset URL is short-lived. */
+function ArrowIcon() {
+  return (
+    <svg
+      width="9"
+      height="9"
+      viewBox="0 0 9 9"
+      fill="none"
+      className="shrink-0"
+    >
+      <path
+        d="M8.5 7.27647L8.40588 0.59412L1.72353 0.500001M8.40588 0.59412L0.5 8.5"
+        stroke="currentColor"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+function SourceLink({ href }: { href: string }) {
+  return (
+    <a
+      href={href}
+      target="_blank"
+      rel="noopener noreferrer"
+      className="inline-flex items-center gap-2 text-black underline underline-offset-2 hover:opacity-60 break-all"
+    >
+      {href}
+      <ArrowIcon />
+    </a>
+  );
+}
+
+/**
+ * One requirement's provenance, as a card. Page-local variant of
+ * components/ui/ModelProvenanceCard.tsx built for this redesign — see the
+ * "Card/badge styling" note at the top of this file for why it isn't
+ * shared.
+ */
+function RequirementCard({ req }: { req: ResolvedRequirement }) {
+  const provenance = req.provenance;
+  const size = provenance ? formatBytes(provenance.size_bytes) : null;
+
+  const rows: { label: string; value: React.ReactNode }[] = [];
+  if (req.category) rows.push({ label: 'Category', value: req.category });
+  if (provenance?.attribution_name)
+    rows.push({ label: 'Attribution', value: provenance.attribution_name });
+  if (provenance?.attribution_url)
+    rows.push({
+      label: 'Source',
+      value: <SourceLink href={provenance.attribution_url} />,
+    });
+  if (provenance?.license_id || provenance?.license_url) {
+    rows.push({
+      label: 'License',
+      value: provenance.license_url ? (
+        <a
+          href={provenance.license_url}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="text-black underline underline-offset-2 hover:opacity-60 break-all"
+        >
+          {provenance.license_id ?? provenance.license_url}
+        </a>
+      ) : (
+        provenance.license_id
+      ),
+    });
+  }
+  if (provenance?.download_url)
+    rows.push({
+      label: 'Download',
+      value: <SourceLink href={provenance.download_url} />,
+    });
+  if (size && size !== '—') rows.push({ label: 'Size', value: size });
+  if (provenance?.reviewer)
+    rows.push({ label: 'Reviewer', value: provenance.reviewer });
+  if (provenance?.reviewed_at)
+    rows.push({ label: 'Reviewed at', value: provenance.reviewed_at });
+  if (provenance?.license_findings)
+    rows.push({
+      label: 'License findings',
+      value: provenance.license_findings,
+    });
+  if (provenance?.evidence)
+    rows.push({ label: 'Evidence', value: provenance.evidence });
+  if (provenance?.rationale)
+    rows.push({ label: 'Rationale', value: provenance.rationale });
+
+  const emptyMessage = emptyMessageFor(req);
+
+  return (
+    <div className="border border-[#ededed] rounded-[8px] p-[16px]">
+      <div className="flex items-center justify-between gap-3 mb-4">
+        <div className="min-w-0">
+          <p className="text-[14px] font-semibold text-black break-all">
+            {req.displayName ?? req.requirement ?? 'Unknown requirement'}
+          </p>
+          {req.displayName && req.requirement && (
+            <p className="text-[12px] text-[#939393] font-mono break-all mt-0.5">
+              {req.requirement}
+            </p>
+          )}
+        </div>
+        {badgeFor(req) && <div className="shrink-0">{badgeFor(req)}</div>}
+      </div>
+      {emptyMessage ? (
+        <p className="text-[13px] text-[#939393]">{emptyMessage}</p>
+      ) : (
+        <div className="flex flex-col gap-4">
+          {rows.map(({ label, value }) => (
+            <div key={label} className="grid grid-cols-[110px_1fr] gap-1">
+              <span className="text-[12px] text-[#939393]">{label}</span>
+              <span className="text-[13px] text-black min-w-0">{value}</span>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -285,7 +443,9 @@ function VariableCard({ v }: { v: WorkflowVariable }) {
 function ErrorPage({ message }: { message: string }) {
   return (
     <div className="px-6 pt-10 pb-6 max-w-[800px] mx-auto">
-      <h1 className="text-[24px] font-semibold text-black mb-2">Workflow review</h1>
+      <h1 className="text-[24px] font-semibold text-black mb-2">
+        Workflow review
+      </h1>
       <p className="text-[13px] text-[#DC2626]">{message}</p>
     </div>
   );
@@ -296,10 +456,14 @@ export default async function WorkflowReviewPage({
 }: {
   searchParams: Promise<{ workflowSource?: string; riskTolerance?: string }>;
 }) {
-  const { workflowSource, riskTolerance } = await searchParams;
+  // riskTolerance is accepted (see the "Input contract" note above) but
+  // unused — nothing on this page is tolerance-driven yet.
+  const { workflowSource } = await searchParams;
 
   if (!workflowSource) {
-    return <ErrorPage message="Missing required workflowSource query parameter — this page has nothing to load without it." />;
+    return (
+      <ErrorPage message="Missing required workflowSource query parameter — this page has nothing to load without it." />
+    );
   }
 
   let doc: PseudorandomWorkflowDocument;
@@ -307,82 +471,124 @@ export default async function WorkflowReviewPage({
     const res = await fetch(workflowSource, { cache: 'no-store' });
     if (!res.ok) throw new Error(`workflowSource returned ${res.status}`);
     const json = await res.json();
-    if (!json || typeof json !== 'object' || !Array.isArray(json.endpoint_requirements)) {
-      throw new Error('workflowSource did not return a pseudorandom workflow document (missing endpoint_requirements)');
+    if (
+      !json ||
+      typeof json !== 'object' ||
+      !Array.isArray(json.endpoint_requirements)
+    ) {
+      throw new Error(
+        'workflowSource did not return a pseudorandom workflow document (missing endpoint_requirements)',
+      );
     }
     doc = json as PseudorandomWorkflowDocument;
   } catch (err) {
-    return <ErrorPage message={`Couldn't load the workflow document: ${err instanceof Error ? err.message : String(err)}`} />;
+    return (
+      <ErrorPage
+        message={`Couldn't load the workflow document: ${err instanceof Error ? err.message : String(err)}`}
+      />
+    );
   }
 
-  const resolved = await Promise.all(doc.endpoint_requirements.map(resolveEntry));
+  const resolved = await Promise.all(
+    doc.endpoint_requirements.map(resolveEntry),
+  );
   const summary = computeWorkflowStatus(resolved.map((r) => r.card));
 
   return (
-    <div className="px-6 pt-10 pb-6 max-w-[800px] mx-auto">
-      {/* Workflow identity */}
-      <div className="flex items-start gap-4 mb-3">
-        {doc.thumbnail && (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img src={doc.thumbnail} alt="" className="w-16 h-16 rounded-[8px] object-cover border border-[#E9E9E9] shrink-0" />
-        )}
-        <div className="min-w-0">
-          <h1 className="text-[28px] font-semibold text-black leading-tight">{doc.name || 'Untitled workflow'}</h1>
-          {doc.description && <p className="text-[13px] text-[#939393] mt-1">{doc.description}</p>}
+    <div className="px-6 pt-10 pb-6 max-w-[700px] mx-auto">
+      <div className="flex flex-col gap-11">
+        {/* Workflow identity */}
+        <div className="flex flex-col gap-4">
+          <div className="flex flex-col gap-1">
+            <div className="flex items-center gap-2">
+              <h1 className="text-[28px] font-semibold text-black leading-tight">
+                {doc.name || 'Untitled workflow'}
+              </h1>
+              <StatusPill status={summary.status} />
+              {doc.thumbnail && (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                  src={doc.thumbnail}
+                  alt=""
+                  className="w-[21px] h-[21px] rounded-[4px] object-cover shrink-0"
+                />
+              )}
+            </div>
+            {doc.description && (
+              <p className="text-[15px] text-[#474747]">{doc.description}</p>
+            )}
+          </div>
+          {(doc.attribution?.author || doc.attribution?.license) && (
+            <div className="text-[14px] text-[#939393] flex flex-col gap-1">
+              {doc.attribution.author && (
+                <p>
+                  Author:{' '}
+                  {doc.attribution.author_url ? (
+                    <a
+                      href={doc.attribution.author_url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                    >
+                      {doc.attribution.author}
+                    </a>
+                  ) : (
+                    doc.attribution.author
+                  )}
+                </p>
+              )}
+              {doc.attribution.license && (
+                <p>License: {doc.attribution.license}</p>
+              )}
+            </div>
+          )}
+        </div>
+
+        <div className="border-t border-[#ededed]" />
+
+        <div className="flex flex-col gap-2">
+          <h2 className="text-[20px] font-semibold text-black">
+            Guidance Capabilities
+          </h2>
+          <CapabilitiesSection doc={doc} />
+        </div>
+
+        <div className="flex flex-col gap-2">
+          <h2 className="text-[20px] font-semibold text-black">
+            Variables ({doc.variables?.length ?? 0})
+          </h2>
+          {!doc.variables || doc.variables.length === 0 ? (
+            <p className="text-[13px] text-[#939393]">
+              This workflow has no adjustable variables.
+            </p>
+          ) : (
+            <div className="flex flex-col gap-4">
+              {doc.variables.map((v, i) => (
+                <VariableCard key={`${v.binds_to}-${i}`} v={v} />
+              ))}
+            </div>
+          )}
+        </div>
+
+        <div className="flex flex-col gap-2">
+          <h2 className="text-[20px] font-semibold text-black">
+            Requirements ({resolved.length})
+          </h2>
+          {resolved.length === 0 ? (
+            <p className="text-[13px] text-[#939393]">
+              This workflow has no requirements listed.
+            </p>
+          ) : (
+            <div className="flex flex-col gap-4">
+              {resolved.map((req, i) => (
+                <RequirementCard
+                  key={`${req.recordId ?? req.requirement ?? 'entry'}-${i}`}
+                  req={req}
+                />
+              ))}
+            </div>
+          )}
         </div>
       </div>
-      {(doc.attribution?.author || doc.attribution?.license) && (
-        <div className="text-[13px] text-[#939393] space-y-0.5 mb-6">
-          {doc.attribution.author && (
-            <p>
-              Author:{' '}
-              {doc.attribution.author_url ? (
-                <a href={doc.attribution.author_url} target="_blank" rel="noopener noreferrer" className="text-black underline underline-offset-2 hover:opacity-60">
-                  {doc.attribution.author}
-                </a>
-              ) : (
-                doc.attribution.author
-              )}
-            </p>
-          )}
-          {doc.attribution.license && <p>License: {doc.attribution.license}</p>}
-        </div>
-      )}
-
-      <WorkflowStatusBanner summary={summary} riskTolerance={riskTolerance ?? null} />
-
-      <h2 className="text-[20px] font-semibold text-black mb-3">Guidance Capabilities</h2>
-      <CapabilitiesSection doc={doc} />
-
-      <h2 className="text-[20px] font-semibold text-black mt-8 mb-3">Variables ({doc.variables?.length ?? 0})</h2>
-      {!doc.variables || doc.variables.length === 0 ? (
-        <p className="text-[13px] text-[#939393]">This workflow has no adjustable variables.</p>
-      ) : (
-        <div className="space-y-3">
-          {doc.variables.map((v, i) => (
-            <VariableCard key={`${v.binds_to}-${i}`} v={v} />
-          ))}
-        </div>
-      )}
-
-      <h2 className="text-[20px] font-semibold text-black mt-8 mb-3">Requirements ({resolved.length})</h2>
-      {resolved.length === 0 ? (
-        <p className="text-[13px] text-[#939393]">This workflow has no requirements listed.</p>
-      ) : (
-        <div className="space-y-4">
-          {resolved.map((req, i) => (
-            <ModelProvenanceCard
-              key={`${req.recordId ?? req.requirement ?? 'entry'}-${i}`}
-              name={req.displayName}
-              requirement={req.requirement}
-              category={req.category}
-              provenance={req.provenance}
-              badge={badgeFor(req)}
-              emptyMessage={emptyMessageFor(req)}
-            />
-          ))}
-        </div>
-      )}
     </div>
   );
 }
