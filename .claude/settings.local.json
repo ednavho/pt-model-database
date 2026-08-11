@@ -31,7 +31,13 @@
       "Bash(grep -rn \"api/models/\\\\${\" app/ components/ utils/)",
       "Bash(python3 -c \"import json; json.load\\(open\\('.claude/settings.local.json'\\)\\); print\\('valid json'\\)\")",
       "Bash(echo \"TSC_EXIT:$?\")",
-      "WebFetch(domain:pseudotools.github.io)"
+      "WebFetch(domain:pseudotools.github.io)",
+      "mcp__plugin_figma_figma__get_design_context",
+      "mcp__plugin_figma_figma__get_metadata",
+      "Bash(rm /Users/ednaho/pseudorandom-provenance/public/_test-workflow-review.json)",
+      "Bash(curl -s \"https://huggingface.co/api/models?author=pseudotools\")",
+      "Bash(python3 -c ' *)",
+      "Bash(git fetch *)"
     ]
   }
 }

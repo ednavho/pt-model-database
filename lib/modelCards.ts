@@ -12,12 +12,15 @@
  * by the Package Workflow Wizard's exported JSON — see
  * app/package-workflow/WorkflowWizard.tsx.
  *
- * Front-matter field names on the deployed card template itself are NOT
- * renamed to match (that's Claudius' template, out of our control) —
- * `artifact_file` on the card becomes `requirement` here, and the card's
- * `source_reference` (a blob-viewer URL, not a direct download link) is
- * consumed only to compute `provenance.download_url`; it is not exposed as
- * its own field.
+ * As of Claudius' latest card template update, the front-matter field names
+ * on the deployed cards match this shape directly — `record_id`, `category`,
+ * `requirement`, `display_name`, and a nested `provenance:` block with the
+ * same keys as ModelProvenance below (including a real, direct
+ * `download_url` — no more blob-URL derivation needed). No field-name
+ * translation happens here anymore. `license_findings`/`evidence`/
+ * `rationale` are the one exception: the front matter's copies of those
+ * three are always null placeholders, so they're still read from the
+ * Markdown body's H2 sections instead (see parseBody()).
  */
 
 import matter from 'gray-matter';
@@ -38,7 +41,7 @@ const IN_PROGRESS = 'in_progress';
 // full card — otherwise the category filter dropdown could silently
 // return zero results for the tag-spelled value it was built from.
 const CATEGORY_TAG_MAP: Record<string, string> = {
-  checkpoint: 'checkpoint',
+  checkpoint: 'checkpoints',
   controlnet: 'controlnet',
   'clip-vision': 'clip_vision',
   'ip-adapter': 'ipadapter',
@@ -49,7 +52,7 @@ export const RECOGNIZED_CATEGORIES = Object.values(CATEGORY_TAG_MAP);
 
 /** Display label per canonical category value, for UI rendering. */
 export const CATEGORY_LABELS: Record<string, string> = {
-  checkpoint: 'Checkpoint',
+  checkpoints: 'Checkpoint',
   controlnet: 'ControlNet',
   clip_vision: 'Clip Vision',
   ipadapter: 'IPAdapter',
@@ -224,22 +227,6 @@ export function computeWorkflowStatus(records: (ModelCardRecord | null)[]): Work
 }
 
 /**
- * size_bytes has no home on the card schema yet — Claudius is adding it to
- * the template later. Hardcoded here from the values Supabase already had
- * for these exact 6 repos (pulled via the still-live by-filename route)
- * so the frontend has something real to show in the meantime. Delete this
- * block once the cards carry the field themselves.
- */
-const HARDCODED_SIZE_BYTES: Record<string, number> = {
-  'pseudotools/checkpoint-juggernaut-x-hyper': 7105348616,
-  'pseudotools/checkpoint-ai-angel-mix-v30': 2132626066,
-  'pseudotools/checkpoint-albedo-base-xl-v21': 6938041042,
-  'pseudotools/checkpoint-realvisxl-v50-lightning': 6938065512,
-  'pseudotools/checkpoint-sdxl-base-1-0': 6938078334,
-  'pseudotools/checkpoint-sdxl-refiner-1-0': 6075981930,
-};
-
-/**
  * DEMO HARDCODE (edna/testing-purposes only): per-repo attribution so demo
  * cards credit the model's actual real-world source instead of our own
  * pseudotools org (which is just the mirror, not the creator). Delete this
@@ -364,17 +351,13 @@ function cleanSection(text: string | null): string | null {
   return text;
 }
 
-/** Extracts the H1 as display_name and the three named H2 sections. */
+/** Extracts the three named H2 sections from the card body. */
 function parseBody(body: string): {
-  display_name: string;
   license_findings: string | null;
   evidence: string | null;
   rationale: string | null;
 } {
   const lines = body.split('\n');
-
-  const h1Index = lines.findIndex((l) => /^#\s+/.test(l));
-  const display_name = h1Index >= 0 ? lines[h1Index].replace(/^#\s+/, '').trim() : '';
 
   // Every H2 heading and the line range of its content (up to the next H2).
   const h2Positions: { heading: string; start: number }[] = [];
@@ -393,23 +376,10 @@ function parseBody(body: string): {
   };
 
   return {
-    display_name,
     license_findings: cleanSection(sectionText('License Findings')),
     evidence: cleanSection(sectionText('Evidence')),
     rationale: cleanSection(sectionText('Rationale')),
   };
-}
-
-/**
- * source_reference is a "blob" URL — HF's HTML viewer page for the file,
- * not a direct download. Every HF file has a real download link at the
- * same path under /resolve/ instead of /blob/, with ?download=true to
- * force an attachment response rather than an inline/preview one.
- */
-function deriveDownloadUrl(sourceReference: string | null): string | null {
-  if (!sourceReference) return null;
-  if (!sourceReference.includes('/blob/')) return sourceReference;
-  return sourceReference.replace('/blob/', '/resolve/') + '?download=true';
 }
 
 /**
@@ -424,26 +394,31 @@ export async function fetchModelCard(repoPath: string): Promise<ModelCardRecord 
 
   const raw = await res.text();
   const { data: fm, content } = matter(raw);
-  const { display_name, license_findings, evidence, rationale } = parseBody(content);
+  const { license_findings, evidence, rationale } = parseBody(content);
 
-  const risk_severity = cleanScale(fm.risk_severity);
-  const evidence_completeness = cleanScale(fm.evidence_completeness);
-  const evidence_reliability = cleanScale(fm.evidence_reliability);
+  // The card's own provenance block — same shape as ModelProvenance, but
+  // still untrusted input, so every field still goes through
+  // cleanString/cleanScale below rather than being spread in directly.
+  const fmProvenance = (fm.provenance ?? {}) as Record<string, unknown>;
+
+  const risk_severity = cleanScale(fmProvenance.risk_severity);
+  const evidence_completeness = cleanScale(fmProvenance.evidence_completeness);
+  const evidence_reliability = cleanScale(fmProvenance.evidence_reliability);
 
   const demoAttribution = HARDCODED_ATTRIBUTION[repoPath] ?? FALLBACK_ATTRIBUTION;
 
   const provenance: ModelProvenance = {
-    download_url: deriveDownloadUrl(cleanString(fm.source_reference)),
-    size_bytes: HARDCODED_SIZE_BYTES[repoPath] ?? null,
+    download_url: cleanString(fmProvenance.download_url),
+    size_bytes: typeof fmProvenance.size_bytes === 'number' ? fmProvenance.size_bytes : null,
     // DEMO HARDCODE (edna/testing-purposes only): license/attribution are
     // blank on the real cards today, which reads as broken in a demo.
-    // Revert to cleanString(fm.license_id) etc. before merging anywhere real.
-    license_id: cleanString(fm.license_id) ?? 'CreativeML Open RAIL-M',
-    license_url: cleanString(fm.license_url) ?? 'https://huggingface.co/spaces/CompVis/stable-diffusion-license',
-    attribution_name: cleanString(fm.attribution_name) ?? demoAttribution.name,
-    attribution_url: cleanString(fm.attribution_url) ?? demoAttribution.url,
-    reviewer: cleanString(fm.reviewer),
-    reviewed_at: cleanString(fm.reviewed_at),
+    // Revert to cleanString(fmProvenance.license_id) etc. before merging anywhere real.
+    license_id: cleanString(fmProvenance.license_id) ?? 'CreativeML Open RAIL-M',
+    license_url: cleanString(fmProvenance.license_url) ?? 'https://huggingface.co/spaces/CompVis/stable-diffusion-license',
+    attribution_name: cleanString(fmProvenance.attribution_name) ?? demoAttribution.name,
+    attribution_url: cleanString(fmProvenance.attribution_url) ?? demoAttribution.url,
+    reviewer: cleanString(fmProvenance.reviewer),
+    reviewed_at: cleanString(fmProvenance.reviewed_at),
     license_findings,
     evidence,
     rationale,
@@ -455,8 +430,8 @@ export async function fetchModelCard(repoPath: string): Promise<ModelCardRecord 
   return {
     record_id: repoPath,
     category: cleanString(fm.category) ?? '',
-    requirement: cleanString(fm.artifact_file),
-    display_name,
+    requirement: cleanString(fm.requirement),
+    display_name: cleanString(fm.display_name) ?? '',
     provenance,
     // DEMO HARDCODE (edna/testing-purposes only): force every card to
     // "Vetted" regardless of real review scores, so demos look finished.
