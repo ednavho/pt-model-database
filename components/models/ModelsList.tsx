@@ -77,7 +77,7 @@ export default function ModelsList({
         </Suspense>
         <Suspense fallback={<div className="h-8 w-[120px] rounded-[8px] bg-zinc-50 border border-[#E9E9E9]" />}>
           <FilterDropdown
-            dropdownLabel="Risk"
+            dropdownLabel="Status"
             options={riskOptions}
             selected={selectedRisks}
             paramName="risk"

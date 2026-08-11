@@ -112,13 +112,13 @@ export type ReviewStatus = (typeof REVIEW_STATUS_VALUES)[number];
  */
 export const REVIEW_STATUS_META: Record<ReviewStatus, { label: string; className: string }> = {
   vetted: { label: 'Vetted', className: 'bg-emerald-50 text-emerald-700 border-emerald-200' },
-  likely_safe: { label: 'Likely Safe', className: 'bg-teal-50 text-teal-700 border-teal-200' },
-  needs_review: { label: 'Needs Review', className: 'bg-amber-50 text-amber-700 border-amber-200' },
+  likely_safe: { label: 'Potentially Problematic', className: 'bg-teal-50 text-teal-700 border-teal-200' },
+  needs_review: { label: 'Unhealthy', className: 'bg-amber-50 text-amber-700 border-amber-200' },
   potentially_problematic: {
-    label: 'Potentially Problematic',
+    label: 'Review Pending',
     className: 'bg-red-50 text-red-700 border-red-200',
   },
-  unknown: { label: 'Not Yet Reviewed', className: 'bg-zinc-50 text-zinc-500 border-zinc-200' },
+  unknown: { label: 'Unknown', className: 'bg-zinc-50 text-zinc-500 border-zinc-200' },
 };
 
 /**
