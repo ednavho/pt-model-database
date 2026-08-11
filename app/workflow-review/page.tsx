@@ -321,11 +321,11 @@ function VariableCard({ v }: { v: WorkflowVariable }) {
 function ArrowIcon() {
   return (
     <svg
-      width="9"
-      height="9"
+      width="7"
+      height="7"
       viewBox="0 0 9 9"
       fill="none"
-      className="shrink-0"
+      className="inline-block ml-1 align-middle"
     >
       <path
         d="M8.5 7.27647L8.40588 0.59412L1.72353 0.500001M8.40588 0.59412L0.5 8.5"
@@ -343,7 +343,7 @@ function SourceLink({ href }: { href: string }) {
       href={href}
       target="_blank"
       rel="noopener noreferrer"
-      className="inline-flex items-center gap-2 text-black underline underline-offset-2 hover:opacity-60 break-all"
+      className="text-black underline underline-offset-2 hover:opacity-60 break-all"
     >
       {href}
       <ArrowIcon />
@@ -431,7 +431,7 @@ function RequirementCard({ req }: { req: ResolvedRequirement }) {
           {rows.map(({ label, value }) => (
             <div key={label} className="grid grid-cols-[110px_1fr] gap-1">
               <span className="text-[12px] text-[#939393]">{label}</span>
-              <span className="text-[13px] text-black min-w-0">{value}</span>
+              <span className="text-[13px] text-black min-w-0 max-w-4/5">{value}</span>
             </div>
           ))}
         </div>
