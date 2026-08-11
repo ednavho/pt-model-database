@@ -672,7 +672,7 @@ export default function ImageInfoViewer() {
                             style={zoomed ? { animation: 'lineage-rise 200ms ease-out' } : undefined}
                             className={
                               zoomed
-                                ? 'relative flex h-full w-full max-w-6xl flex-col rounded-sm border border-zinc-200 bg-white shadow-xl'
+                                ? 'relative flex h-full w-full max-w-6xl flex-col rounded-[8px] border border-zinc-200 bg-white shadow-xl'
                                 : 'border border-[#E9E9E9] rounded-[8px] relative'
                             }
                           >
@@ -714,7 +714,7 @@ export default function ImageInfoViewer() {
                                 rootId={DROPPED_ROOT}
                                 layout={graphLayout}
                                 imageUrl={imageUrl}
-                                showLinkLabels={zoomed}
+                                showLinkLabels
                                 className={zoomed ? 'h-full w-full' : 'h-[420px]'}
                               />
                               {!zoomed && (

@@ -422,7 +422,7 @@ export default function LineageSketch() {
       </div>
 
       <div className="relative rounded-sm border border-zinc-200">
-        {graph({ className: 'h-[420px] w-full' })}
+        {graph({ showLinkLabels: true, className: 'h-[420px] w-full' })}
 
         <button
           type="button"
