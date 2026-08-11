@@ -180,9 +180,11 @@ export default function LineageSketch() {
   const index = useMemo(() => buildIndex(nodes, links), [nodes, links]);
 
   const indexRef = useRef(index);
-  indexRef.current = index;
   const rootIdRef = useRef(rootId);
-  rootIdRef.current = rootId;
+  useEffect(() => {
+    indexRef.current = index;
+    rootIdRef.current = rootId;
+  }, [index, rootId]);
 
   const toggle = useCallback((id: string) => {
     setExpanded((prev) => {

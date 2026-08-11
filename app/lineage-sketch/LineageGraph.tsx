@@ -268,7 +268,9 @@ export default function LineageGraph({
   const hasFittedRef = useRef(false);
   const selectedRef = useRef<string | null>(null);
   const onToggleRef = useRef(onToggle);
-  onToggleRef.current = onToggle;
+  useEffect(() => {
+    onToggleRef.current = onToggle;
+  }, [onToggle]);
   /** The node id most recently clicked to expand/collapse — the point
    *  collapsing children should visually "suck back into" in
    *  playNodeTransition(), rather than just shrinking wherever they stood. */
@@ -315,7 +317,7 @@ export default function LineageGraph({
       if (!width || !height) return;
 
       // Closure vars populated inside the timeline block; zoom handler reads them.
-      let yearXByYear = new Map<number, number>();
+      const yearXByYear = new Map<number, number>();
       let yearStripLayer: d3.Selection<SVGGElement, unknown, null, undefined> | null = null;
 
       // Never shrinks below the raw frame size — zooming in should let nodes
