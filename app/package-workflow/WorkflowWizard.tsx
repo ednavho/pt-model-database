@@ -1018,11 +1018,14 @@ export default function WorkflowWizard() {
       const d = m.dbMatch;
       return {
         display_name: d?.display_name || m.fileNameLocal,
-        // m.categoryLocal (ComfyUI folder name, e.g. "checkpoints") rather
-        // than d?.category (the card's own singular label, e.g.
-        // "checkpoint") — this is what determines where the file lands on
-        // disk, so it needs to stay consistent whether or not the DB match
-        // succeeded. Worth confirming this is the right call.
+        // m.categoryLocal (the wizard's own ComfyUI-folder classification,
+        // e.g. "checkpoints") rather than d?.category (the card's own
+        // category field) — this is what determines where the file lands
+        // on disk, so it has to be defined even when there's no DB match.
+        // The two now agree on a successful match too: CATEGORY_TAG_MAP in
+        // lib/modelCards.ts normalizes every category to this same plural
+        // spelling, so this is just about DB-match independence, not a
+        // naming workaround.
         category: m.categoryLocal.toLowerCase(),
         requirement: d?.requirement ?? m.fileNameLocal,
         record_id: m.recordId || null,
