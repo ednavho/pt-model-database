@@ -605,7 +605,7 @@ export default function ImageInfoViewer() {
                         { label: 'Water', value: result.env.water_l != null ? `${fmt(result.env.water_l, 3)} L` : '—' },
                         { label: 'Worker location', value: result.env.worker_location ?? '—' },
                       ].map(({ label, value }) => (
-                        <div key={label} className="grid grid-cols-[110px_1fr]">
+                        <div key={label} className="grid grid-cols-[120px_1fr]">
                           <span className="text-[13px] text-[#939393]">{label}</span>
                           <span className="text-[13px] text-black tabular-nums">{value}</span>
                         </div>

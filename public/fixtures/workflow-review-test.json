@@ -1,7 +1,7 @@
 {
   "pseudorandom_workflow_schema_version": 0.3,
   "type": "comfy",
-  "name": "Hugo",
+  "name": "Lugo",
   "description": "Basic SD Hyper model and 'dense diffusion' style regional prompting.",
   "thumbnail": null,
   "attribution": {
@@ -59,18 +59,6 @@
       }
     },
     {
-      "display_name": "Stable Diffusion XL Base 1.0",
-      "category": "checkpoints",
-      "requirement": "sd_xl_base_1.0.safetensors",
-      "record_id": "pseudotools/checkpoint-sdxl-base-1-0",
-      "provenance": {
-        "download_url": null, "size_bytes": null, "license_id": null, "license_url": null,
-        "attribution_name": null, "attribution_url": null, "reviewer": null, "reviewed_at": null,
-        "license_findings": null, "evidence": null, "rationale": null,
-        "risk_severity": -1, "evidence_completeness": -1, "evidence_reliability": -1
-      }
-    },
-    {
       "display_name": "My Custom LoRA",
       "category": "loras",
       "requirement": "my_custom_lora.safetensors",
@@ -79,8 +67,8 @@
         "size_bytes": 151234567,
         "license_id": "CreativeML Open RAIL-M",
         "license_url": "https://huggingface.co/spaces/CompVis/stable-diffusion-license",
-        "attribution_name": "Some Creator",
-        "attribution_url": "https://civitai.com/user/some-creator"
+        "attribution_name": "Mara Voss",
+        "attribution_url": "https://civitai.com/user/maravoss"
       }
     },
     {

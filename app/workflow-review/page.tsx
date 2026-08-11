@@ -3,7 +3,6 @@
 import {
   EMPTY_PROVENANCE,
   REVIEW_STATUS_META,
-  computeWorkflowStatus,
   fetchModelCard,
   formatBytes,
   type ModelCardRecord,
@@ -11,6 +10,7 @@ import {
   type ReviewStatus,
 } from '@/lib/modelCards';
 import { cn } from '@/utils/cn';
+import { TitleBadgeIcon } from './TitleBadgeIcon';
 
 /**
  * Replaces the Rhino plugin's old left "Workflow Details" panel — reached
@@ -199,15 +199,29 @@ function StatusPill({ status }: { status: ReviewStatus }) {
 function badgeFor(req: ResolvedRequirement): React.ReactNode {
   if (req.isExtension) return null;
   if (req.card) return <StatusPill status={req.card.status} />;
-  // Grey, like REVIEW_STATUS_META's 'unknown' pill — a manual entry has no
-  // record to review in the first place, which reads the same as "not yet
-  // reviewed" here.
-  if (req.isManual)
+  if (req.isManual) {
+    // TEST-ONLY ONE-OFF (edna/testing-purposes, workflow-review-test.json
+    // fixture only): a standalone orange pill for this one demo card,
+    // deliberately not wired into REVIEW_STATUS_META/computeReviewStatus —
+    // "Potentially problematic" + orange isn't a combination any of the
+    // five shared statuses currently produce. Remove this branch along
+    // with the fixture entry it's keyed to.
+    if (req.requirement === 'my_custom_lora.safetensors') {
+      return (
+        <Pill className="bg-orange-50 text-orange-700 border-orange-200">
+          Potentially problematic
+        </Pill>
+      );
+    }
+    // Grey, like REVIEW_STATUS_META's 'unknown' pill — a manual entry has no
+    // record to review in the first place, which reads the same as "not yet
+    // reviewed" here.
     return (
       <Pill className="bg-zinc-50 text-zinc-500 border-zinc-200">
         Review Pending
       </Pill>
     );
+  }
   return null; // record_id given but unresolved — emptyMessageFor() already explains it
 }
 
@@ -276,8 +290,12 @@ function CapabilitiesSection({ doc }: { doc: PseudorandomWorkflowDocument }) {
             {group.items.map((item) => (
               <span
                 key={item.label}
-                className={item.used ? 'text-black' : 'text-[#939393]'}
+                className={cn(
+                  'flex items-center gap-1.5',
+                  item.used ? 'text-black' : 'text-[#939393]'
+                )}
               >
+                <span className={cn('w-[3px] h-[3px] rounded-full shrink-0', item.used ? 'bg-black' : 'bg-[#939393]')} />
                 {item.label}
               </span>
             ))}
@@ -297,7 +315,7 @@ function VariableCard({ v }: { v: WorkflowVariable }) {
           <p className="text-[14px] font-semibold text-black">
             {v.name || '(unnamed variable)'}
           </p>
-          <span className="text-[12px] text-[#939393] border border-[#e8e8e8] rounded-[6px] px-[6px] py-[4px] opacity-80">
+          <span className="text-[12px] text-[#939393] border border-[#e8e8e8] rounded-[6px] px-[6px] py-[2px] opacity-80">
             {v.type}
           </span>
         </div>
@@ -337,7 +355,7 @@ function ArrowIcon() {
   );
 }
 
-function SourceLink({ href }: { href: string }) {
+function SourceLink({ href, label }: { href: string; label?: string }) {
   return (
     <a
       href={href}
@@ -345,7 +363,7 @@ function SourceLink({ href }: { href: string }) {
       rel="noopener noreferrer"
       className="text-black underline underline-offset-2 hover:opacity-60 break-all"
     >
-      {href}
+      {label ?? href}
       <ArrowIcon />
     </a>
   );
@@ -374,14 +392,7 @@ function RequirementCard({ req }: { req: ResolvedRequirement }) {
     rows.push({
       label: 'License',
       value: provenance.license_url ? (
-        <a
-          href={provenance.license_url}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="text-black underline underline-offset-2 hover:opacity-60 break-all"
-        >
-          {provenance.license_id ?? provenance.license_url}
-        </a>
+        <SourceLink href={provenance.license_url} label={provenance.license_id ?? provenance.license_url} />
       ) : (
         provenance.license_id
       ),
@@ -492,10 +503,9 @@ export default async function WorkflowReviewPage({
   const resolved = await Promise.all(
     doc.endpoint_requirements.map(resolveEntry),
   );
-  const summary = computeWorkflowStatus(resolved.map((r) => r.card));
 
   return (
-    <div className="px-6 pt-10 pb-6 max-w-[700px] mx-auto">
+    <div className="px-6 pt-10 pb-6 max-w-[750px] mx-auto">
       <div className="flex flex-col gap-11">
         {/* Workflow identity */}
         <div className="flex flex-col gap-4">
@@ -504,7 +514,7 @@ export default async function WorkflowReviewPage({
               <h1 className="text-[28px] font-semibold text-black leading-tight">
                 {doc.name || 'Untitled workflow'}
               </h1>
-              <StatusPill status={summary.status} />
+              <TitleBadgeIcon />
               {doc.thumbnail && (
                 // eslint-disable-next-line @next/next/no-img-element
                 <img

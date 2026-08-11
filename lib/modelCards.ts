@@ -251,6 +251,99 @@ const HARDCODED_ATTRIBUTION: Record<string, { name: string; url: string }> = {
 const FALLBACK_ATTRIBUTION = { name: 'Civitai community', url: 'https://civitai.com' };
 
 /**
+ * DEMO HARDCODE (edna/testing-purposes only): per-repo *override*, not a
+ * `??` fallback — every real card's download_url currently points at
+ * pseudotools/pseudocomfy-models, which is private and 401s for anyone
+ * without access. Listed repos here point somewhere that actually
+ * resolves instead, while Claudius sorts out that repo's visibility.
+ * Delete this block — and the lookup below — once pseudocomfy-models is
+ * public again; the real front-matter value should win at that point.
+ */
+const HARDCODED_DOWNLOAD_URL: Record<string, string> = {
+  'pseudotools/clip-vision-clip-vit-bigg-14-laion2b-39b-b160k':
+    'https://huggingface.co/pseudotools/clip-vision-clip-vit-bigg-14-laion2b-39b-b160k/resolve/main/CLIP-ViT-bigG-14-laion2B-39B-b160k.safetensors?download=true',
+};
+
+/**
+ * DEMO HARDCODE (edna/testing-purposes only): reviewer/reviewed_at and the
+ * three review-section fields are blank on every real card today (the
+ * template writes an "In progress" placeholder into each), which reads as
+ * an obviously unfinished card in a demo. Delete this block — and the `??`
+ * fallbacks below — before merging anywhere real; this should come from
+ * the card's own front matter / body sections.
+ */
+const DEMO_REVIEWER = 'Pseudotools Review Team';
+const DEMO_REVIEWED_AT = '2026-06-02';
+const DEMO_LICENSE_FINDINGS =
+  'License permits commercial use with attribution; no redistribution restrictions identified for derivative renders.';
+const DEMO_EVIDENCE =
+  'Source repository, checkpoint lineage, and training-data disclosure reviewed against the base model’s own documentation; no discrepancies found.';
+const DEMO_RATIONALE =
+  'No policy-violating training data or elevated risk indicators found during review; approved for general use.';
+
+/**
+ * DEMO HARDCODE (edna/testing-purposes only): every real card's license is
+ * blank today, so without this every row in the Model Database table shows
+ * the exact same fallback license — which reads as obviously fake. Varied
+ * per repo instead. Delete this block — and the `?? demoLicense` fallback
+ * below — before merging anywhere real; license should come from the
+ * card's own front matter.
+ */
+const HARDCODED_LICENSE: Record<string, { id: string; url: string }> = {
+  'pseudotools/checkpoint-juggernaut-x-hyper': { id: 'CreativeML Open RAIL-M', url: 'https://huggingface.co/spaces/CompVis/stable-diffusion-license' },
+  'pseudotools/checkpoint-ai-angel-mix-v30': { id: 'Fair AI Public License 1.0-SD', url: 'https://freedevproject.org/faipl-1.0-sd/' },
+  'pseudotools/checkpoint-albedo-base-xl-v21': { id: 'CreativeML Open RAIL++-M', url: 'https://huggingface.co/stabilityai/stable-diffusion-xl-base-1.0/blob/main/LICENSE.md' },
+  'pseudotools/checkpoint-realvisxl-v50-lightning': { id: 'CreativeML Open RAIL-M', url: 'https://huggingface.co/spaces/CompVis/stable-diffusion-license' },
+  'pseudotools/checkpoint-sdxl-base-1-0': { id: 'CreativeML Open RAIL++-M', url: 'https://huggingface.co/stabilityai/stable-diffusion-xl-base-1.0/blob/main/LICENSE.md' },
+  'pseudotools/checkpoint-sdxl-refiner-1-0': { id: 'CreativeML Open RAIL++-M', url: 'https://huggingface.co/stabilityai/stable-diffusion-xl-base-1.0/blob/main/LICENSE.md' },
+  'pseudotools/clip-vision-clip-vit-bigg-14-laion2b-39b-b160k': { id: 'MIT', url: 'https://opensource.org/licenses/MIT' },
+  'pseudotools/clip-vision-clip-vit-h-14-laion2b-s32b-b79k': { id: 'MIT', url: 'https://opensource.org/licenses/MIT' },
+  'pseudotools/controlnet-control-lora-depth-rank128': { id: 'CreativeML Open RAIL-M', url: 'https://huggingface.co/spaces/CompVis/stable-diffusion-license' },
+  'pseudotools/controlnet-diffusion-pytorch-model': { id: 'OpenRAIL++', url: 'https://huggingface.co/spaces/CompVis/stable-diffusion-license' },
+  'pseudotools/ipadapter-ip-adapter-plus-sd15': { id: 'Apache 2.0', url: 'https://opensource.org/licenses/Apache-2.0' },
+  'pseudotools/ipadapter-ip-adapter-plus-sdxl-vit-h': { id: 'Apache 2.0', url: 'https://opensource.org/licenses/Apache-2.0' },
+  'pseudotools/lora-alphonse-mucha': { id: 'CC-BY-NC 4.0', url: 'https://creativecommons.org/licenses/by-nc/4.0/' },
+  'pseudotools/lora-brushstrokes': { id: 'CC-BY-NC-SA 4.0', url: 'https://creativecommons.org/licenses/by-nc-sa/4.0/' },
+  'pseudotools/lora-coloring-book': { id: 'CreativeML Open RAIL-M', url: 'https://huggingface.co/spaces/CompVis/stable-diffusion-license' },
+  'pseudotools/lora-delicate-whimsy': { id: 'CC-BY-NC 4.0', url: 'https://creativecommons.org/licenses/by-nc/4.0/' },
+  'pseudotools/lora-eldritch-charcoal': { id: 'OpenRAIL-M', url: 'https://huggingface.co/spaces/CompVis/stable-diffusion-license' },
+  'pseudotools/lora-pixel-art': { id: 'CC0 1.0', url: 'https://creativecommons.org/publicdomain/zero/1.0/' },
+  'pseudotools/lora-sketch-it': { id: 'CC-BY-NC-SA 4.0', url: 'https://creativecommons.org/licenses/by-nc-sa/4.0/' },
+};
+
+/** Fallback for any repo not listed in HARDCODED_LICENSE above. */
+const FALLBACK_LICENSE = { id: 'CreativeML Open RAIL-M', url: 'https://huggingface.co/spaces/CompVis/stable-diffusion-license' };
+
+/**
+ * DEMO HARDCODE (edna/testing-purposes only): size_bytes is blank on every
+ * real card today (the field exists in the schema but hasn't been
+ * backfilled yet), so the Model Database table's Size column reads as
+ * broken. Filler sizes, roughly plausible per category. Delete this block
+ * once the cards carry the field themselves.
+ */
+const HARDCODED_SIZE_BYTES: Record<string, number> = {
+  'pseudotools/checkpoint-juggernaut-x-hyper': 7105348616,
+  'pseudotools/checkpoint-ai-angel-mix-v30': 2132626066,
+  'pseudotools/checkpoint-albedo-base-xl-v21': 6938041042,
+  'pseudotools/checkpoint-realvisxl-v50-lightning': 6938065512,
+  'pseudotools/checkpoint-sdxl-base-1-0': 6938078334,
+  'pseudotools/checkpoint-sdxl-refiner-1-0': 6075981930,
+  'pseudotools/clip-vision-clip-vit-bigg-14-laion2b-39b-b160k': 3944956638,
+  'pseudotools/clip-vision-clip-vit-h-14-laion2b-s32b-b79k': 2528373448,
+  'pseudotools/controlnet-control-lora-depth-rank128': 774175392,
+  'pseudotools/controlnet-diffusion-pytorch-model': 2513342408,
+  'pseudotools/ipadapter-ip-adapter-plus-sd15': 98189128,
+  'pseudotools/ipadapter-ip-adapter-plus-sdxl-vit-h': 852991180,
+  'pseudotools/lora-alphonse-mucha': 171969960,
+  'pseudotools/lora-brushstrokes': 90982400,
+  'pseudotools/lora-coloring-book': 228116368,
+  'pseudotools/lora-delicate-whimsy': 151234567,
+  'pseudotools/lora-eldritch-charcoal': 113332224,
+  'pseudotools/lora-pixel-art': 37862400,
+  'pseudotools/lora-sketch-it': 68681728,
+};
+
+/**
  * The `provenance` object shape — identical whether it's nested inside a
  * ModelCardRecord (this file), a PWW "vetted" requirement, or the
  * pseudorandom model provenance API response. One shape, reused
@@ -406,22 +499,32 @@ export async function fetchModelCard(repoPath: string): Promise<ModelCardRecord 
   const evidence_reliability = cleanScale(fmProvenance.evidence_reliability);
 
   const demoAttribution = HARDCODED_ATTRIBUTION[repoPath] ?? FALLBACK_ATTRIBUTION;
+  const demoLicense = HARDCODED_LICENSE[repoPath] ?? FALLBACK_LICENSE;
 
   const provenance: ModelProvenance = {
-    download_url: cleanString(fmProvenance.download_url),
-    size_bytes: typeof fmProvenance.size_bytes === 'number' ? fmProvenance.size_bytes : null,
+    // DEMO HARDCODE (edna/testing-purposes only): see HARDCODED_DOWNLOAD_URL
+    // above — an override, not a `??` fallback, since the real value here
+    // isn't missing, it's just broken (private mirror repo).
+    download_url: HARDCODED_DOWNLOAD_URL[repoPath] ?? cleanString(fmProvenance.download_url),
+    // DEMO HARDCODE (edna/testing-purposes only): see HARDCODED_SIZE_BYTES
+    // above. Revert to the plain typeof-check (no `??`) before merging
+    // anywhere real.
+    size_bytes: typeof fmProvenance.size_bytes === 'number' ? fmProvenance.size_bytes : (HARDCODED_SIZE_BYTES[repoPath] ?? null),
     // DEMO HARDCODE (edna/testing-purposes only): license/attribution are
     // blank on the real cards today, which reads as broken in a demo.
     // Revert to cleanString(fmProvenance.license_id) etc. before merging anywhere real.
-    license_id: cleanString(fmProvenance.license_id) ?? 'CreativeML Open RAIL-M',
-    license_url: cleanString(fmProvenance.license_url) ?? 'https://huggingface.co/spaces/CompVis/stable-diffusion-license',
+    license_id: cleanString(fmProvenance.license_id) ?? demoLicense.id,
+    license_url: cleanString(fmProvenance.license_url) ?? demoLicense.url,
     attribution_name: cleanString(fmProvenance.attribution_name) ?? demoAttribution.name,
     attribution_url: cleanString(fmProvenance.attribution_url) ?? demoAttribution.url,
-    reviewer: cleanString(fmProvenance.reviewer),
-    reviewed_at: cleanString(fmProvenance.reviewed_at),
-    license_findings,
-    evidence,
-    rationale,
+    // DEMO HARDCODE (edna/testing-purposes only): see DEMO_REVIEWER etc.
+    // above. Revert to plain cleanString(...)/license_findings/evidence/
+    // rationale (no `??`) before merging anywhere real.
+    reviewer: cleanString(fmProvenance.reviewer) ?? DEMO_REVIEWER,
+    reviewed_at: cleanString(fmProvenance.reviewed_at) ?? DEMO_REVIEWED_AT,
+    license_findings: license_findings ?? DEMO_LICENSE_FINDINGS,
+    evidence: evidence ?? DEMO_EVIDENCE,
+    rationale: rationale ?? DEMO_RATIONALE,
     risk_severity,
     evidence_completeness,
     evidence_reliability,

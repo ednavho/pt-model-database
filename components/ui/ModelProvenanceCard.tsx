@@ -76,7 +76,7 @@ export default function ModelProvenanceCard({
 
   return (
     <div className="border border-[#E9E9E9] rounded-[8px] px-5 py-4">
-      <div className="flex items-start justify-between gap-3 mb-3">
+      <div className="flex items-center justify-between gap-3 mb-3">
         <div className="min-w-0">
           <p className="text-[15px] font-semibold text-black break-all">{name ?? requirement ?? 'Unknown requirement'}</p>
           {name && requirement && (

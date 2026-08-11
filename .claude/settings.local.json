@@ -37,7 +37,14 @@
       "Bash(rm /Users/ednaho/pseudorandom-provenance/public/_test-workflow-review.json)",
       "Bash(curl -s \"https://huggingface.co/api/models?author=pseudotools\")",
       "Bash(python3 -c ' *)",
-      "Bash(git fetch *)"
+      "Bash(git fetch *)",
+      "Bash(curl -sI \"https://huggingface.co/pseudotools/pseudocomfy-models/resolve/main/checkpoints/Juggernaut_X_RunDiffusion_Hyper.safetensors\")",
+      "Bash(curl -sI \"https://huggingface.co/pseudotools/pseudocomfy-models\")",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\\\\n\" \"https://huggingface.co/pseudotools/pseudocomfy-models\")",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\\\\n\" \"https://huggingface.co/pseudotools/checkpoint-juggernaut-x-hyper\")",
+      "Bash(curl -s \"https://huggingface.co/pseudotools/pseudocomfy-models/resolve/main/checkpoints/Juggernaut_X_RunDiffusion_Hyper.safetensors\")",
+      "Bash(curl -sI \"https://huggingface.co/pseudotools/clip-vision-clip-vit-bigg-14-laion2b-39b-b160k/resolve/main/CLIP-ViT-bigG-14-laion2B-39B-b160k.safetensors?download=true\")",
+      "Bash(python3 -c \"import json; json.load\\(open\\('/Users/ednaho/pseudorandom-provenance/public/fixtures/workflow-review-test.json'\\)\\); print\\('valid json'\\)\")"
     ]
   }
 }
