@@ -1166,6 +1166,28 @@ export default function LineageGraph({
           .attr('y2', (d) => finalPosOf(d.target as SimNode).y)
           .attr('opacity', 1);
 
+        // linkLabel isn't touched by paintTick() once the sim is pinned/
+        // stopped (the common case after the first entrance), so without
+        // this it stays frozen at its pre-expand/collapse position forever
+        // — every label ends up stacked on top of wherever the graph
+        // happened to be centred at first render. Mirrors `link` above,
+        // just averaging both endpoints instead of drawing a line between
+        // them, with the same -3 vertical offset paintTick() uses.
+        const priorX = (end: SimNode | string) => priorPosOf(end)?.x ?? finalPosOf(end).x;
+        const priorY = (end: SimNode | string) => priorPosOf(end)?.y ?? finalPosOf(end).y;
+        linkLabel
+          ?.attr('x', (d) => (priorX(d.source as SimNode) + priorX(d.target as SimNode)) / 2)
+          .attr('y', (d) => (priorY(d.source as SimNode) + priorY(d.target as SimNode)) / 2 - 3)
+          .attr('opacity', (d) =>
+            previousVisible.has(idOf(d.source as SimNode)) && previousVisible.has(idOf(d.target as SimNode)) ? 1 : 0
+          )
+          .transition()
+          .duration(duration)
+          .ease(spring)
+          .attr('x', (d) => (finalPosOf(d.source as SimNode).x + finalPosOf(d.target as SimNode).x) / 2)
+          .attr('y', (d) => (finalPosOf(d.source as SimNode).y + finalPosOf(d.target as SimNode).y) / 2 - 3)
+          .attr('opacity', 1);
+
         // Collapsing children should read as sucking back into whatever
         // node was just clicked — quick and decisive, not a slow fade in
         // place. A short duration with an accelerating ease-in is what
