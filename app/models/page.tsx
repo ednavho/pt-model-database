@@ -1,9 +1,9 @@
 import ModelsList from '@/components/models/ModelsList';
 import {
+  ASSESSMENT_BADGE_VALUES,
+  BADGE_TAG_META,
   CATEGORY_LABELS,
   RECOGNIZED_CATEGORIES,
-  REVIEW_STATUS_META,
-  REVIEW_STATUS_VALUES,
   listModelRepos,
   fetchModelCard,
 } from '@/lib/modelCards';
@@ -13,9 +13,11 @@ interface SearchParams {
   risk?: string;
 }
 
-const RISK_OPTIONS = REVIEW_STATUS_VALUES.map((value) => ({
-  value,
-  label: REVIEW_STATUS_META[value].label,
+// String-valued (URL query params are always strings) even though the
+// badge itself is a number — ModelsList compares against String(m.badge).
+const RISK_OPTIONS = ASSESSMENT_BADGE_VALUES.map((value) => ({
+  value: String(value),
+  label: BADGE_TAG_META[value].label,
 }));
 
 export default async function ModelsPage({

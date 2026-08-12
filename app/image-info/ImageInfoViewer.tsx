@@ -4,7 +4,7 @@ import ModelProvenanceCard from '@/components/ui/ModelProvenanceCard';
 import RiskBadge from '@/components/ui/RiskBadge';
 import VettingBadge from '@/components/ui/VettingBadge';
 import { MODEL_FILE_TO_NODE, lineageLinks, lineageNodes, type LineageLink, type LineageNode } from '@/data/lineageData';
-import { EMPTY_PROVENANCE, computeReviewStatus, type ModelProvenance, type ReviewStatus } from '@/lib/modelCards';
+import { EMPTY_PROVENANCE, computeRequirementBadge, type AssessmentBadge, type ModelProvenance } from '@/lib/modelCards';
 import type { VettingStatus } from '@/types/database';
 import { cn } from '@/utils/cn';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -57,11 +57,12 @@ type Resolved = Requirement & {
   data: ModelProvenance;
   name: string | null;
   pointerBroken: boolean;
-  /** Synthesized 5-level status, only for new-style (Hugging Face-sourced
-   *  or new-schema-embedded) requirements. null for legacy pre-migration
-   *  requirements, which render their own vetting_status tri-state via
-   *  VettingBadge instead — the two aren't the same shape and don't merge. */
-  status: ReviewStatus | null;
+  /** Synthesized -1..3 assessment badge, only for new-style (Hugging Face-
+   *  sourced or new-schema-embedded) requirements. null for legacy
+   *  pre-migration requirements, which render their own vetting_status
+   *  tri-state via VettingBadge instead — the two aren't the same shape
+   *  and don't merge. */
+  badge: AssessmentBadge | null;
 };
 
 type ParseResult =
@@ -227,10 +228,10 @@ async function resolveRequirements(reqs: Requirement[]): Promise<Resolved[]> {
           name: (hf.display_name as string) ?? r.display_name,
           pointerBroken: false,
           data: hf.provenance as ModelProvenance,
-          status: hf.status as ReviewStatus,
+          badge: hf.badge as AssessmentBadge,
         };
       }
-      return { ...r, source: 'none', name: r.display_name, pointerBroken: true, data: EMPTY_PROVENANCE, status: 'unknown' };
+      return { ...r, source: 'none', name: r.display_name, pointerBroken: true, data: EMPTY_PROVENANCE, badge: -1 };
     }
 
     // No pointer, or a legacy Supabase pointer we don't chase — whatever
@@ -240,12 +241,12 @@ async function resolveRequirements(reqs: Requirement[]): Promise<Resolved[]> {
     // just a DB pointer for it), so its presence is the signal that this
     // is old-schema data with no risk_severity/etc. concept at all — not
     // "new-schema data that happens to be unreviewed". Synthesizing a
-    // status from normalizeLegacyProvenance's -1 defaults in that case
-    // would show "Not Yet Reviewed" instead of the real embedded
-    // vetting_status, so status stays null and VettingBadge takes over.
-    const status =
+    // badge from normalizeLegacyProvenance's -1 defaults in that case
+    // would show "Review Pending" instead of the real embedded
+    // vetting_status, so badge stays null and VettingBadge takes over.
+    const badge =
       r.legacyVettingStatus === null && hasData
-        ? computeReviewStatus(r.provenance.risk_severity, r.provenance.evidence_completeness, r.provenance.evidence_reliability)
+        ? computeRequirementBadge(r.provenance.risk_severity, r.provenance.evidence_completeness, r.provenance.evidence_reliability)
         : null;
     return {
       ...r,
@@ -253,7 +254,7 @@ async function resolveRequirements(reqs: Requirement[]): Promise<Resolved[]> {
       name: r.display_name,
       pointerBroken: false,
       data: r.provenance,
-      status,
+      badge,
     };
   });
 }
@@ -385,8 +386,10 @@ const LAYOUT_OPTIONS: { id: LayoutMode; label: string }[] = [
 
 function RequirementCard({ req }: { req: Resolved }) {
   const isExtension = req.category === 'custom_nodes';
-  const badge = !isExtension && req.status
-    ? <RiskBadge record={{ status: req.status }} />
+  // req.badge can legitimately be 0 ("Insufficient information"), which is
+  // falsy — an explicit null check, not truthiness, is required here.
+  const badge = !isExtension && req.badge != null
+    ? <RiskBadge record={{ badge: req.badge }} />
     : !isExtension && req.legacyVettingStatus
       ? <VettingBadge status={req.legacyVettingStatus.toLowerCase() as VettingStatus} />
       : null;
@@ -798,7 +801,7 @@ export default function ImageInfoViewer() {
                         {resolving && <p className="text-[13px] text-[#939393]">Checking database…</p>}
                         {(resolved.length > 0
                           ? resolved
-                          : result.requirements.map((r): Resolved => ({ ...r, source: 'none', data: EMPTY_PROVENANCE, name: null, pointerBroken: false, status: null }))
+                          : result.requirements.map((r): Resolved => ({ ...r, source: 'none', data: EMPTY_PROVENANCE, name: null, pointerBroken: false, badge: null }))
                         ).map((req, i) => (
                           <RequirementCard key={`${req.requirement}-${i}`} req={req} />
                         ))}
