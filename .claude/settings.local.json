@@ -72,7 +72,12 @@
       "Bash(python3 -m py_compile /Users/ednaho/Downloads/Pseudocomfy/node_loaders_vetted.py)",
       "Bash(npx --yes vercel@latest git connect --help)",
       "Bash(echo \"exit code: $?\")",
-      "Bash(echo \"tsc exit: $?\")"
+      "Bash(echo \"tsc exit: $?\")",
+      "Bash(grep -n \"fetch\\(\\\\`https://huggingface.co\" /Users/ednaho/pseudorandom-provenance/lib/modelCards.ts)",
+      "Bash(npx --yes vercel@latest deploy)",
+      "Bash(curl -s -o /dev/null -w \"HTTP %{http_code} - Total time: %{time_total}s\\\\n\" \"https://pseudorandom-provenance-eug3cueh6-pseudotools-admins-projects.vercel.app/models\")",
+      "Bash(curl -sI \"https://pseudorandom-provenance-eug3cueh6-pseudotools-admins-projects.vercel.app/models\")",
+      "Bash(npx --yes vercel@latest curl \"https://pseudorandom-provenance-eug3cueh6-pseudotools-admins-projects.vercel.app/models\" -- -s -o /dev/null -w \"HTTP %{http_code} - Total time: %{time_total}s\\\\n\")"
     ]
   }
 }

@@ -66,6 +66,14 @@ function categoryOf(tags: string[]): string | null {
   return tag ? CATEGORY_TAG_MAP[tag] : null;
 }
 
+/** How long a Hugging Face response stays cached before Next.js re-fetches
+ *  it — 24 hours, shared by every HF call in this file. A rolling window,
+ *  not a midnight reset: whoever loads a page first re-populates it for
+ *  the next 24h, not "until end of calendar day". A card edited on
+ *  Hugging Face won't show up here until its cache entry ages out —
+ *  accepted tradeoff, not an oversight. */
+const HF_CACHE_SECONDS = 60 * 60 * 24;
+
 /**
  * Lists every pseudotools repo carrying a recognized category tag — a
  * single cheap call to HF's org-listing API (tags only, no README
@@ -73,7 +81,9 @@ function categoryOf(tags: string[]): string | null {
  * lookup so both agree on what counts as a real per-model repo.
  */
 export async function listModelRepos(): Promise<ModelRepoSummary[]> {
-  const res = await fetch(`https://huggingface.co/api/models?author=${HF_ORG}`);
+  const res = await fetch(`https://huggingface.co/api/models?author=${HF_ORG}`, {
+    next: { revalidate: HF_CACHE_SECONDS },
+  });
   if (!res.ok) {
     throw new Error(`Hugging Face list API returned ${res.status}`);
   }
@@ -333,7 +343,9 @@ function parseBody(body: string): {
  * card is an expected, not-yet-populated state, not a server error).
  */
 export async function fetchModelCard(repoPath: string): Promise<ModelCardRecord | null> {
-  const res = await fetch(`https://huggingface.co/${repoPath}/raw/main/README.md`);
+  const res = await fetch(`https://huggingface.co/${repoPath}/raw/main/README.md`, {
+    next: { revalidate: HF_CACHE_SECONDS },
+  });
   if (!res.ok) return null;
 
   const raw = await res.text();
