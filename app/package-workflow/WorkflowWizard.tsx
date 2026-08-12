@@ -1379,20 +1379,30 @@ export default function WorkflowWizard() {
                   </p>
 
                   {m.dbMatch ? (
-                    <div className="mt-4 grid gap-[86px]" style={{ gridTemplateColumns: 'max-content max-content 1fr 1fr' }}>
-                      <div>
+                    // All four columns flex equally (flex-1 min-w-0) — this also solves
+                    // cross-card alignment architecturally rather than via a min-width
+                    // hack: equal flex-1 columns are the same width on every card by
+                    // construction, since they're sized off the row's available width,
+                    // not off each card's own content. min-w-0 is required, not
+                    // decorative — a flex item's default min-width is its content's
+                    // intrinsic width, which silently blocks shrinking below that and
+                    // is what caused the row to overflow/get cut off at narrower
+                    // window widths otherwise. Gap is 32px (down from 64px) — Category
+                    // stays put and Status/License/Attribution shift left with it.
+                    <div className="mt-4 flex items-start gap-[32px] w-full">
+                      <div className="flex-1 min-w-0">
                         <p className="text-[12px] text-[#939393] mb-1">Category</p>
                         <p className="text-[13px] text-black capitalize">{m.dbMatch.category}</p>
                       </div>
-                      <div>
+                      <div className="flex-1 min-w-0">
                         <p className="text-[12px] text-[#939393] mb-1">Status</p>
                         <RiskBadge record={m.dbMatch} />
                       </div>
-                      <div>
+                      <div className="flex-1 min-w-0">
                         <p className="text-[12px] text-[#939393] mb-1">License</p>
                         <p className="text-[13px] text-black">{m.dbMatch.provenance.license_id ?? '—'}</p>
                       </div>
-                      <div>
+                      <div className="flex-1 min-w-0">
                         <p className="text-[12px] text-[#939393] mb-1">Attribution</p>
                         <p className="text-[13px] text-black">{m.dbMatch.provenance.attribution_name ?? '—'}</p>
                       </div>

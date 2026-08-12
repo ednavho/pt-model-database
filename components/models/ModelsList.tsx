@@ -48,7 +48,7 @@ export default function ModelsList({
   const matchesCategory = (m: ModelCardRecord) =>
     selectedCategories.length === 0 || selectedCategories.includes(m.category);
   const matchesRisk = (m: ModelCardRecord) =>
-    selectedRisks.length === 0 || selectedRisks.includes(m.status);
+    selectedRisks.length === 0 || selectedRisks.includes(String(m.badge));
   const matchesSearch = (m: ModelCardRecord) => {
     if (!search.trim()) return true;
     const q = search.toLowerCase();
