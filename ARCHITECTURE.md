@@ -138,16 +138,20 @@ the Model Database table, the model detail page, the PWW model picker, the
 Image Info viewer, and independently re-implemented in the Rhino plugin
 itself for its own icon (see below).
 
-**Requirement-level badge** (`computeRequirementBadge`):
+**Requirement-level badge** (`computeRequirementBadge`) — numbers only here;
+see [the two label sets](#two-label-sets-same-numbers-different-surfaces)
+below for what each number actually renders as, since that differs by
+surface and neither matches the internal names this formula was originally
+specced with:
 
 ```
 certainty = min(evidence_completeness, evidence_reliability)
 
-risk_severity == -1 or certainty == -1   →  -1  (not assessed)
-certainty <= 1                            →   0  (insufficient information)
-risk_severity >= 3                        →   1  (not recommended)
-risk_severity <= 1                        →   3  (favorable)
-else (risk_severity == 2)                 →   2  (proceed with caution)
+risk_severity == -1 or certainty == -1   →  -1
+certainty <= 1                            →   0
+risk_severity >= 3                        →   1
+risk_severity <= 1                        →   3
+else (risk_severity == 2)                 →   2
 ```
 
 The reasoning: certainty gates whether the risk score is even trustworthy
@@ -165,7 +169,7 @@ using an aggregation picked by `riskTolerance` (`high` / `low` / `dev`):
 `riskTolerance` is a setting the Rhino plugin is expected to pass in as a
 query param — see the next section.
 
-**Two label sets, same numbers, different surfaces:**
+### Two label sets, same numbers, different surfaces
 
 - Icon-only (a badge shown with no visible text, just an icon + tooltip —
   used by the Rhino plugin's own icon and this app's workflow-review title
