@@ -68,7 +68,8 @@
         "license_id": "CreativeML Open RAIL-M",
         "license_url": "https://huggingface.co/spaces/CompVis/stable-diffusion-license",
         "attribution_name": "Mara Voss",
-        "attribution_url": "https://civitai.com/user/maravoss"
+        "attribution_url": "https://civitai.com/user/maravoss",
+        "risk_severity": 2, "evidence_completeness": 3, "evidence_reliability": 3
       }
     },
     {

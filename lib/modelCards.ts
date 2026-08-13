@@ -66,6 +66,14 @@ function categoryOf(tags: string[]): string | null {
   return tag ? CATEGORY_TAG_MAP[tag] : null;
 }
 
+/** How long a Hugging Face response stays cached before Next.js re-fetches
+ *  it — 24 hours, shared by every HF call in this file. A rolling window,
+ *  not a midnight reset: whoever loads a page first re-populates it for
+ *  the next 24h, not "until end of calendar day". A card edited on
+ *  Hugging Face won't show up here until its cache entry ages out —
+ *  accepted tradeoff, not an oversight. */
+const HF_CACHE_SECONDS = 60 * 60 * 24;
+
 /**
  * Lists every pseudotools repo carrying a recognized category tag — a
  * single cheap call to HF's org-listing API (tags only, no README
@@ -73,7 +81,9 @@ function categoryOf(tags: string[]): string | null {
  * lookup so both agree on what counts as a real per-model repo.
  */
 export async function listModelRepos(): Promise<ModelRepoSummary[]> {
-  const res = await fetch(`https://huggingface.co/api/models?author=${HF_ORG}`);
+  const res = await fetch(`https://huggingface.co/api/models?author=${HF_ORG}`, {
+    next: { revalidate: HF_CACHE_SECONDS },
+  });
   if (!res.ok) {
     throw new Error(`Hugging Face list API returned ${res.status}`);
   }
@@ -95,135 +105,103 @@ export async function listModelRepos(): Promise<ModelRepoSummary[]> {
  */
 export type ReviewScale = number;
 
-export const REVIEW_STATUS_VALUES = [
-  'vetted',
-  'likely_safe',
-  'needs_review',
-  'potentially_problematic',
-  'unknown',
-] as const;
-export type ReviewStatus = (typeof REVIEW_STATUS_VALUES)[number];
-
 /**
- * Display metadata for the synthesized 5-level status badge — the only
- * place risk_severity/evidence_completeness/evidence_reliability surface
- * in the model database UI. The raw scores stay inside `provenance`,
- * visible only in the technical JSON (API response / PWW preview).
+ * The -1..3 assessment badge Kyle and Edna specced, originally for
+ * app/workflow-review/page.tsx (the Rhino plugin's own icon uses the same
+ * formula independently — see that file's header comment) and since rolled
+ * out everywhere a model's review state is shown: the model database
+ * table, its detail page, the Package Workflow Wizard's model picker, and
+ * app/image-info/ImageInfoViewer.tsx. This replaced the older five-value
+ * ReviewStatus/computeReviewStatus/REVIEW_STATUS_META system, which no
+ * longer exists in this file.
  */
-export const REVIEW_STATUS_META: Record<ReviewStatus, { label: string; className: string }> = {
-  vetted: { label: 'Vetted', className: 'bg-emerald-50 text-emerald-700 border-emerald-200' },
-  likely_safe: { label: 'Potentially Problematic', className: 'bg-teal-50 text-teal-700 border-teal-200' },
-  needs_review: { label: 'Unhealthy', className: 'bg-amber-50 text-amber-700 border-amber-200' },
-  potentially_problematic: {
-    label: 'Review Pending',
-    className: 'bg-red-50 text-red-700 border-red-200',
-  },
-  unknown: { label: 'Unknown', className: 'bg-zinc-50 text-zinc-500 border-zinc-200' },
+export type AssessmentBadge = -1 | 0 | 1 | 2 | 3;
+
+/** Every possible badge value, worst-confidence-first — for building
+ *  filter-option lists (see app/models/page.tsx's RISK_OPTIONS). */
+export const ASSESSMENT_BADGE_VALUES: AssessmentBadge[] = [-1, 0, 1, 2, 3];
+
+/** Icon-only tooltip copy — for surfaces that show just an icon (the Rhino
+ *  plugin, and workflow-review's title badge), never a visible text tag. */
+export const BADGE_TOOLTIP_LABELS: Record<AssessmentBadge, string> = {
+  [-1]: "We haven't checked yet",
+  0: "We looked, but can't tell",
+  1: 'We have significant concerns',
+  2: 'We have some concerns',
+  3: 'Looks good, have fun!',
+};
+
+/** Visible text-tag copy — for surfaces that show an actual pill with a
+ *  phrase in it (per-requirement cards), distinct from the tooltip copy
+ *  above even though both index the same badge value. */
+export const BADGE_TAG_META: Record<AssessmentBadge, { label: string; className: string }> = {
+  [-1]: { label: 'Review Pending', className: 'bg-zinc-50 text-zinc-500 border-zinc-200' },
+  0: { label: 'Insufficient information', className: 'bg-zinc-50 text-zinc-500 border-zinc-200' },
+  1: { label: 'Not recommended', className: 'bg-red-50 text-red-700 border-red-200' },
+  2: { label: 'Potentially problematic', className: 'bg-amber-50 text-amber-700 border-amber-200' },
+  3: { label: 'Healthy', className: 'bg-emerald-50 text-emerald-700 border-emerald-200' },
 };
 
 /**
- * Synthesizes the three 0-4 review dimensions into one of five statuses.
- *
- * risk_severity: 0 = safest, 4 = most severe (confirmed direction).
- * evidence_completeness / evidence_reliability: 0 = weakest, 4 = strongest.
- *
- * Any of the three being -1 (not yet assigned) makes the whole thing
- * "unknown" — a status badge shouldn't imply confidence the review doesn't
- * have. Otherwise: evidence_confidence is the weaker of completeness and
- * reliability (an assessment is only as trustworthy as its weakest
- * dimension — complete-but-unverified evidence shouldn't count the same as
- * complete-and-verified). risk_severity and evidence_confidence are each
- * bucketed into low/moderate/high (or weak/moderate/strong) and combined:
- *
- *                  weak evidence   moderate evidence   strong evidence
- *   low risk         Likely Safe      Likely Safe          Vetted
- *   moderate risk     Needs Review     Needs Review        Likely Safe
- *   high risk         Needs Review     Potentially Prob.    Potentially Prob.
- *
- * A high-risk call backed only by weak evidence lands on "Needs Review"
- * rather than "Potentially Problematic": the severity claim itself isn't
- * trustworthy enough yet to present as a confirmed concern, but it's too
- * serious a claim to present as safe either.
+ * Requirement-level badge. Certainty (the weaker of evidence_completeness/
+ * evidence_reliability) gates whether risk_severity is even trustworthy
+ * enough to report — a severe-sounding call backed by weak evidence reads
+ * as "insufficient information", not as a confirmed problem.
  */
-export function computeReviewStatus(
+export function computeRequirementBadge(
   risk_severity: ReviewScale,
   evidence_completeness: ReviewScale,
   evidence_reliability: ReviewScale
-): ReviewStatus {
-  if (risk_severity === -1 || evidence_completeness === -1 || evidence_reliability === -1) {
-    return 'unknown';
-  }
-
-  const riskBucket = risk_severity <= 1 ? 'low' : risk_severity === 2 ? 'moderate' : 'high';
-  const confidence = Math.min(evidence_completeness, evidence_reliability);
-  const evidenceBucket = confidence >= 3 ? 'strong' : confidence === 2 ? 'moderate' : 'weak';
-
-  const matrix: Record<typeof riskBucket, Record<typeof evidenceBucket, ReviewStatus>> = {
-    low: { weak: 'likely_safe', moderate: 'likely_safe', strong: 'vetted' },
-    moderate: { weak: 'needs_review', moderate: 'needs_review', strong: 'likely_safe' },
-    high: { weak: 'needs_review', moderate: 'potentially_problematic', strong: 'potentially_problematic' },
-  };
-
-  return matrix[riskBucket][evidenceBucket];
+): AssessmentBadge {
+  const certainty = Math.min(evidence_completeness, evidence_reliability);
+  if (risk_severity === -1 || certainty === -1) return -1;
+  if (certainty <= 1) return 0;
+  if (risk_severity >= 3) return 1;
+  if (risk_severity <= 1) return 3;
+  return 2;
 }
 
-export type WorkflowStatusSummary = {
-  /** Worst-case verdict among reviewed requirements, or 'unknown' if none
-   *  of them have completed review — see computeWorkflowStatus() below. */
-  status: ReviewStatus;
-  total: number;
-  verdictCount: number;
-  pendingReviewCount: number;
-  notInDatabaseCount: number;
-};
+export type RiskTolerance = 'high' | 'low' | 'dev';
 
 /**
- * Rolls up a whole workflow's resolved model cards into one consolidated
- * status, for the workflow-level badge in app/workflow-review/page.tsx.
+ * Workflow-level badge: collapses every requirement's three scores into one
+ * triple per `riskTolerance`'s aggregation rule, then runs the same formula
+ * as computeRequirementBadge. `dev` returns null (not -1) — "no badge
+ * calculated" is a distinct state from "checked and found nothing", and the
+ * workflow runs regardless of score in that mode.
  *
- * Pass one entry per requirement in the workflow: the matched
- * ModelCardRecord, or `null` for anything with no database/Hugging Face
- * record at all — a missing record_id, a record_id that didn't resolve
- * (fetchModelCard returned null), or a manual-fallback entry that was
- * never reviewed in the first place. All three of those are the same
- * "notInDatabase" bucket here; the caller (the page) still tells them
- * apart for rendering purposes, but the rollup only needs "is there a
- * record to grade at all".
- *
- * Every record splits into exactly one of three buckets:
- *   - verdict:  has a record, and it has completed review (status !== 'unknown')
- *   - pending:  has a record, but review isn't done yet (status === 'unknown')
- *   - missing:  no record at all
- *
- * Only the verdict bucket ever influences the workflow badge — worst case
- * wins among those. pending and missing never pull the badge in either
- * direction: a workflow badge implying a risk verdict for a model nobody
- * has actually reviewed would be a false safety claim. If there are no
- * verdict-bucket records at all, the workflow status is 'unknown', and the
- * page's copy should say so plainly rather than imply anything was checked.
+ * `high` averages each dimension across requirements as specified; note
+ * this doesn't exclude -1 (unscored) requirements from the average, so a
+ * workflow that's a mix of scored and unscored requirements can average out
+ * to a misleadingly middling number under `high` specifically. `low`
+ * doesn't have this problem — min()/max() naturally let one unscored
+ * requirement pull the whole result to -1. Flagging this rather than
+ * silently deviating from the given spec; worth confirming with Kyle if
+ * unscored requirements should be excluded from the `high` average instead.
  */
-export function computeWorkflowStatus(records: (ModelCardRecord | null)[]): WorkflowStatusSummary {
-  const total = records.length;
-  let verdictCount = 0;
-  let pendingReviewCount = 0;
-  let notInDatabaseCount = 0;
-  const verdictStatuses: ReviewStatus[] = [];
+export function computeWorkflowBadge(
+  scores: Pick<ModelProvenance, 'risk_severity' | 'evidence_completeness' | 'evidence_reliability'>[],
+  riskTolerance: RiskTolerance
+): AssessmentBadge | null {
+  if (riskTolerance === 'dev') return null;
+  if (scores.length === 0) return -1;
 
-  for (const record of records) {
-    if (!record) {
-      notInDatabaseCount++;
-    } else if (record.status === 'unknown') {
-      pendingReviewCount++;
-    } else {
-      verdictCount++;
-      verdictStatuses.push(record.status);
-    }
-  }
+  const avg = (nums: number[]) => nums.reduce((a, b) => a + b, 0) / nums.length;
 
-  const worstToBest: ReviewStatus[] = ['potentially_problematic', 'needs_review', 'likely_safe', 'vetted'];
-  const status = worstToBest.find((s) => verdictStatuses.includes(s)) ?? 'unknown';
+  const risk_severity =
+    riskTolerance === 'high'
+      ? avg(scores.map((s) => s.risk_severity))
+      : Math.max(...scores.map((s) => s.risk_severity));
+  const evidence_completeness =
+    riskTolerance === 'high'
+      ? avg(scores.map((s) => s.evidence_completeness))
+      : Math.min(...scores.map((s) => s.evidence_completeness));
+  const evidence_reliability =
+    riskTolerance === 'high'
+      ? avg(scores.map((s) => s.evidence_reliability))
+      : Math.min(...scores.map((s) => s.evidence_reliability));
 
-  return { status, total, verdictCount, pendingReviewCount, notInDatabaseCount };
+  return computeRequirementBadge(risk_severity, evidence_completeness, evidence_reliability);
 }
 
 /**
@@ -394,12 +372,12 @@ export type ModelCardRecord = {
   provenance: ModelProvenance;
 
   /** Synthesized from provenance.risk_severity/evidence_completeness/
-   *  evidence_reliability via computeReviewStatus() — never stored on the
-   *  card itself. The only one of these four review signals meant to
-   *  appear in the model database UI (status column, list badge); the raw
-   *  scores stay inside `provenance`, surfaced only in technical/JSON
-   *  views (API response, PWW preview). */
-  status: ReviewStatus;
+   *  evidence_reliability via computeRequirementBadge() — never stored on
+   *  the card's own front matter. The one of these four review signals
+   *  meant to appear as a badge across the UI; the raw scores stay inside
+   *  `provenance`, surfaced only in technical/JSON views (API response,
+   *  PWW preview). */
+  badge: AssessmentBadge;
 };
 
 /** Plain string field: sentinel and blank become null, everything else passes through. */
@@ -482,7 +460,9 @@ function parseBody(body: string): {
  * card is an expected, not-yet-populated state, not a server error).
  */
 export async function fetchModelCard(repoPath: string): Promise<ModelCardRecord | null> {
-  const res = await fetch(`https://huggingface.co/${repoPath}/raw/main/README.md`);
+  const res = await fetch(`https://huggingface.co/${repoPath}/raw/main/README.md`, {
+    next: { revalidate: HF_CACHE_SECONDS },
+  });
   if (!res.ok) return null;
 
   const raw = await res.text();
@@ -537,9 +517,12 @@ export async function fetchModelCard(repoPath: string): Promise<ModelCardRecord 
     display_name: cleanString(fm.display_name) ?? '',
     provenance,
     // DEMO HARDCODE (edna/testing-purposes only): force every card to
-    // "Vetted" regardless of real review scores, so demos look finished.
-    // Revert to computeReviewStatus(...) before merging anywhere real.
-    status: 'vetted',
+    // badge 3 ("Healthy") regardless of real review scores, so demos look
+    // finished — same intent as the old `status: 'vetted'` hardcode this
+    // replaces, now that main's real -1..3 badge system is merged in.
+    // Revert to computeRequirementBadge(risk_severity, evidence_completeness,
+    // evidence_reliability) before merging anywhere real.
+    badge: 3,
   };
 }
 

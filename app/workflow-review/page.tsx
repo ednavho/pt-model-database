@@ -1,16 +1,19 @@
 /** @format */
 
 import {
+  BADGE_TAG_META,
+  BADGE_TOOLTIP_LABELS,
   EMPTY_PROVENANCE,
-  REVIEW_STATUS_META,
+  computeRequirementBadge,
+  computeWorkflowBadge,
   fetchModelCard,
   formatBytes,
+  type AssessmentBadge,
   type ModelCardRecord,
   type ModelProvenance,
-  type ReviewStatus,
+  type RiskTolerance,
 } from '@/lib/modelCards';
 import { cn } from '@/utils/cn';
-import { TitleBadgeIcon } from './TitleBadgeIcon';
 
 /**
  * Replaces the Rhino plugin's old left "Workflow Details" panel — reached
@@ -32,10 +35,13 @@ import { TitleBadgeIcon } from './TitleBadgeIcon';
  * still genuinely unconfirmed is how the plugin delivers this link (the
  * generation mechanism doesn't exist yet) — not the document shape itself.
  *
- * `riskTolerance` is accepted in the query-param contract so the plugin's
- * setting has somewhere to land, but nothing here is tolerance-driven yet
- * — no thresholds, no filtering, no display. That behavior hasn't been
- * specified.
+ * `riskTolerance` (high/low/dev) drives the workflow-level badge in the
+ * title row — see computeWorkflowBadge() in lib/modelCards.ts for the
+ * aggregation rule per value. Anything other than exactly "high" or "dev"
+ * falls back to "low" (the most conservative aggregation), including when
+ * the param is missing entirely — there's no spec for what an absent value
+ * should mean, so this errs toward surfacing concerns rather than hiding
+ * them.
  *
  * ── Card/badge styling ────────────────────────────────────────────────────
  * The redesign's requirement cards and badges are kept page-local (not
@@ -103,7 +109,9 @@ type PseudorandomWorkflowDocument = {
 };
 
 type ResolvedRequirement = {
-  /** Feeds computeWorkflowStatus() — null for anything with no live database record. */
+  /** Null for anything with no live database record — kept around for
+   *  display (record_id lookups etc.); the workflow badge is computed from
+   *  `provenance` below instead, not from this. */
   card: ModelCardRecord | null;
   displayName: string | null;
   requirement: string | null;
@@ -166,8 +174,7 @@ async function resolveEntry(
   };
 }
 
-/** Shared pill shape for StatusPill and the manual-entry "Review Pending"
- *  badge, so the two visually match — just different colors/label. */
+/** Shared pill shape for badgeFor()'s BADGE_TAG_META-driven tags. */
 function Pill({
   className,
   children,
@@ -187,42 +194,53 @@ function Pill({
   );
 }
 
-/** Tighter pill than components/ui/RiskBadge.tsx's, sized to sit inline
- *  next to the workflow title as well as on a requirement card. Reuses
- *  REVIEW_STATUS_META's colors so the semantics (and the palette) stay
- *  identical to the shared badge. */
-function StatusPill({ status }: { status: ReviewStatus }) {
-  const meta = REVIEW_STATUS_META[status];
+/** Per-requirement badge: the visible text-tag variant of the -1..3
+ *  assessment badge (BADGE_TAG_META), computed from that requirement's own
+ *  provenance scores — not tied to card/isManual, since both already carry
+ *  a `provenance` object (a card's own, or the manual entry's/EMPTY_PROVENANCE
+ *  merge). Only the "record_id given but unresolved" case has no
+ *  provenance at all; emptyMessageFor() already explains that case. */
+function badgeFor(req: ResolvedRequirement): React.ReactNode {
+  if (req.isExtension || !req.provenance) return null;
+  const badge = computeRequirementBadge(
+    req.provenance.risk_severity,
+    req.provenance.evidence_completeness,
+    req.provenance.evidence_reliability,
+  );
+  const meta = BADGE_TAG_META[badge];
   return <Pill className={meta.className}>{meta.label}</Pill>;
 }
 
-function badgeFor(req: ResolvedRequirement): React.ReactNode {
-  if (req.isExtension) return null;
-  if (req.card) return <StatusPill status={req.card.status} />;
-  if (req.isManual) {
-    // TEST-ONLY ONE-OFF (edna/testing-purposes, workflow-review-test.json
-    // fixture only): a standalone orange pill for this one demo card,
-    // deliberately not wired into REVIEW_STATUS_META/computeReviewStatus —
-    // "Potentially problematic" + orange isn't a combination any of the
-    // five shared statuses currently produce. Remove this branch along
-    // with the fixture entry it's keyed to.
-    if (req.requirement === 'my_custom_lora.safetensors') {
-      return (
-        <Pill className="bg-orange-50 text-orange-700 border-orange-200">
-          Potentially problematic
-        </Pill>
-      );
-    }
-    // Grey, like REVIEW_STATUS_META's 'unknown' pill — a manual entry has no
-    // record to review in the first place, which reads the same as "not yet
-    // reviewed" here.
-    return (
-      <Pill className="bg-zinc-50 text-zinc-500 border-zinc-200">
-        Review Pending
-      </Pill>
-    );
-  }
-  return null; // record_id given but unresolved — emptyMessageFor() already explains it
+function parseRiskTolerance(raw: string | undefined): RiskTolerance {
+  return raw === 'high' || raw === 'dev' ? raw : 'low';
+}
+
+/** Icon-only badge for the workflow title row — a colored glyph with a
+ *  native hover tooltip (BADGE_TOOLTIP_LABELS), matching how the Rhino
+ *  plugin shows this same badge (icon only, no visible text). `badge` is
+ *  null when riskTolerance is "dev": no badge is calculated at all in that
+ *  mode, so nothing renders. */
+function WorkflowBadgeIcon({ badge }: { badge: AssessmentBadge | null }) {
+  if (badge === null) return null;
+
+  const styles: Record<AssessmentBadge, { bg: string; fg: string; glyph: string }> = {
+    [-1]: { bg: '#F4F4F5', fg: '#71717A', glyph: '–' },
+    0: { bg: '#F4F4F5', fg: '#71717A', glyph: '?' },
+    1: { bg: '#FEF2F2', fg: '#DC2626', glyph: '!' },
+    2: { bg: '#FFFBEB', fg: '#D97706', glyph: '!' },
+    3: { bg: '#ECFDF5', fg: '#059669', glyph: '✓' },
+  };
+  const { bg, fg, glyph } = styles[badge];
+
+  return (
+    <span
+      title={BADGE_TOOLTIP_LABELS[badge]}
+      className="inline-flex items-center justify-center w-[21px] h-[21px] rounded-full text-[12px] font-semibold shrink-0 cursor-default"
+      style={{ backgroundColor: bg, color: fg }}
+    >
+      {glyph}
+    </span>
+  );
 }
 
 function emptyMessageFor(req: ResolvedRequirement): string | null {
@@ -467,9 +485,8 @@ export default async function WorkflowReviewPage({
 }: {
   searchParams: Promise<{ workflowSource?: string; riskTolerance?: string }>;
 }) {
-  // riskTolerance is accepted (see the "Input contract" note above) but
-  // unused — nothing on this page is tolerance-driven yet.
-  const { workflowSource } = await searchParams;
+  const { workflowSource, riskTolerance: riskToleranceParam } = await searchParams;
+  const riskTolerance = parseRiskTolerance(riskToleranceParam);
 
   if (!workflowSource) {
     return (
@@ -503,6 +520,14 @@ export default async function WorkflowReviewPage({
   const resolved = await Promise.all(
     doc.endpoint_requirements.map(resolveEntry),
   );
+  // Extensions (e.g. the pseudocomfy custom-node entry) never carry a
+  // reviewable badge of their own — badgeFor() returns null for them too —
+  // so they're excluded here rather than pollute the aggregate with
+  // EMPTY_PROVENANCE's -1/-1/-1.
+  const workflowBadge = computeWorkflowBadge(
+    resolved.filter((r) => !r.isExtension).map((r) => r.provenance ?? EMPTY_PROVENANCE),
+    riskTolerance,
+  );
 
   return (
     <div className="px-6 pt-10 pb-6 max-w-[750px] mx-auto">
@@ -514,7 +539,7 @@ export default async function WorkflowReviewPage({
               <h1 className="text-[28px] font-semibold text-black leading-tight">
                 {doc.name || 'Untitled workflow'}
               </h1>
-              <TitleBadgeIcon />
+              <WorkflowBadgeIcon badge={workflowBadge} />
               {doc.thumbnail && (
                 // eslint-disable-next-line @next/next/no-img-element
                 <img
