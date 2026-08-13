@@ -1382,20 +1382,30 @@ export default function WorkflowWizard() {
                   </p>
 
                   {m.dbMatch ? (
-                    <div className="mt-4 grid gap-[86px]" style={{ gridTemplateColumns: 'max-content max-content 1fr 1fr' }}>
-                      <div>
+                    // Category/Status share flex-grow:1 each, License/Attribution
+                    // share flex-grow:2 each — so Category+Status together claim 1/3
+                    // of the row and License+Attribution together claim 2/3, not an
+                    // even 1/4 each. Still equal-by-construction across cards (not
+                    // max-content), so this keeps the earlier alignment fix — every
+                    // card still gets identical column widths regardless of its own
+                    // category/badge text. min-w-0 stays required: a flex item's
+                    // default min-width is its content's intrinsic width, which
+                    // silently blocks shrinking below that and can overflow the row
+                    // at narrower window widths otherwise.
+                    <div className="mt-4 flex items-start gap-[32px] w-full">
+                      <div className="flex-1 min-w-0">
                         <p className="text-[12px] text-[#939393] mb-1">Category</p>
                         <p className="text-[13px] text-black capitalize">{m.dbMatch.category}</p>
                       </div>
-                      <div>
+                      <div className="flex-1 min-w-0">
                         <p className="text-[12px] text-[#939393] mb-1">Status</p>
                         <RiskBadge record={m.dbMatch} />
                       </div>
-                      <div>
+                      <div className="flex-[2] min-w-0">
                         <p className="text-[12px] text-[#939393] mb-1">License</p>
                         <p className="text-[13px] text-black">{m.dbMatch.provenance.license_id ?? '—'}</p>
                       </div>
-                      <div>
+                      <div className="flex-[2] min-w-0">
                         <p className="text-[12px] text-[#939393] mb-1">Attribution</p>
                         <p className="text-[13px] text-black">{m.dbMatch.provenance.attribution_name ?? '—'}</p>
                       </div>

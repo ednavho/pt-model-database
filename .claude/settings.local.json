@@ -44,7 +44,10 @@
       "Bash(curl -s -o /dev/null -w \"%{http_code}\\\\n\" \"https://huggingface.co/pseudotools/checkpoint-juggernaut-x-hyper\")",
       "Bash(curl -s \"https://huggingface.co/pseudotools/pseudocomfy-models/resolve/main/checkpoints/Juggernaut_X_RunDiffusion_Hyper.safetensors\")",
       "Bash(curl -sI \"https://huggingface.co/pseudotools/clip-vision-clip-vit-bigg-14-laion2b-39b-b160k/resolve/main/CLIP-ViT-bigG-14-laion2B-39B-b160k.safetensors?download=true\")",
-      "Bash(python3 -c \"import json; json.load\\(open\\('/Users/ednaho/pseudorandom-provenance/public/fixtures/workflow-review-test.json'\\)\\); print\\('valid json'\\)\")"
+      "Bash(python3 -c \"import json; json.load\\(open\\('/Users/ednaho/pseudorandom-provenance/public/fixtures/workflow-review-test.json'\\)\\); print\\('valid json'\\)\")",
+      "Bash(echo \"tsc exit: $?\")",
+      "Bash(curl -s \"https://tools.pseudotools.com/api/models/hf/pseudotools/checkpoint-juggernaut-x-hyper\")",
+      "Bash(python3 -m json.tool)"
     ]
   }
 }
