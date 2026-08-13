@@ -47,7 +47,9 @@
       "Bash(python3 -c \"import json; json.load\\(open\\('/Users/ednaho/pseudorandom-provenance/public/fixtures/workflow-review-test.json'\\)\\); print\\('valid json'\\)\")",
       "Bash(echo \"tsc exit: $?\")",
       "Bash(curl -s \"https://tools.pseudotools.com/api/models/hf/pseudotools/checkpoint-juggernaut-x-hyper\")",
-      "Bash(python3 -m json.tool)"
+      "Bash(python3 -m json.tool)",
+      "Bash(git merge *)",
+      "Bash(git commit *)"
     ]
   }
 }
