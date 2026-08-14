@@ -2,8 +2,8 @@
 
 import {
   BADGE_TAG_META,
-  BADGE_TOOLTIP_LABELS,
   EMPTY_PROVENANCE,
+  WORKFLOW_BADGE_TOOLTIP_LABELS,
   computeRequirementBadge,
   computeWorkflowBadge,
   fetchModelCard,
@@ -13,6 +13,7 @@ import {
   type ModelProvenance,
   type RiskTolerance,
 } from '@/lib/modelCards';
+import { InfoTooltip } from '@/components/ui/InfoTooltip';
 import { cn } from '@/utils/cn';
 
 /**
@@ -215,31 +216,30 @@ function parseRiskTolerance(raw: string | undefined): RiskTolerance {
   return raw === 'high' || raw === 'dev' ? raw : 'low';
 }
 
-/** Icon-only badge for the workflow title row — a colored glyph with a
- *  native hover tooltip (BADGE_TOOLTIP_LABELS), matching how the Rhino
- *  plugin shows this same badge (icon only, no visible text). `badge` is
- *  null when riskTolerance is "dev": no badge is calculated at all in that
- *  mode, so nothing renders. */
+/** Icon-only badge for the workflow title row — the status badge asset with a
+ *  styled hover tooltip (WORKFLOW_BADGE_TOOLTIP_LABELS, not the terser
+ *  plugin copy — this page's visitors need the badge explained, not just
+ *  labeled). `badge` is null when riskTolerance is "dev": no badge is
+ *  calculated at all in that mode, so nothing renders. */
 function WorkflowBadgeIcon({ badge }: { badge: AssessmentBadge | null }) {
   if (badge === null) return null;
 
-  const styles: Record<AssessmentBadge, { bg: string; fg: string; glyph: string }> = {
-    [-1]: { bg: '#F4F4F5', fg: '#71717A', glyph: '–' },
-    0: { bg: '#F4F4F5', fg: '#71717A', glyph: '?' },
-    1: { bg: '#FEF2F2', fg: '#DC2626', glyph: '!' },
-    2: { bg: '#FFFBEB', fg: '#D97706', glyph: '!' },
-    3: { bg: '#ECFDF5', fg: '#059669', glyph: '✓' },
+  const icons: Record<AssessmentBadge, string> = {
+    [-1]: '/assets/review-pending.svg',
+    0: '/assets/insufficient-information.svg',
+    1: '/assets/not-recommended.svg',
+    2: '/assets/potentially-problematic.svg',
+    3: '/assets/healthy.svg',
   };
-  const { bg, fg, glyph } = styles[badge];
 
   return (
-    <span
-      title={BADGE_TOOLTIP_LABELS[badge]}
-      className="inline-flex items-center justify-center w-[21px] h-[21px] rounded-full text-[12px] font-semibold shrink-0 cursor-default"
-      style={{ backgroundColor: bg, color: fg }}
-    >
-      {glyph}
-    </span>
+    <InfoTooltip text={WORKFLOW_BADGE_TOOLTIP_LABELS[badge]}>
+      <img
+        src={icons[badge]}
+        alt={WORKFLOW_BADGE_TOOLTIP_LABELS[badge]}
+        className="inline-block w-[21px] h-[21px] shrink-0"
+      />
+    </InfoTooltip>
   );
 }
 

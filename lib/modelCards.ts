@@ -121,14 +121,28 @@ export type AssessmentBadge = -1 | 0 | 1 | 2 | 3;
  *  filter-option lists (see app/models/page.tsx's RISK_OPTIONS). */
 export const ASSESSMENT_BADGE_VALUES: AssessmentBadge[] = [-1, 0, 1, 2, 3];
 
-/** Icon-only tooltip copy — for surfaces that show just an icon (the Rhino
- *  plugin, and workflow-review's title badge), never a visible text tag. */
+/** Icon-only tooltip copy for the Rhino plugin's badge — terse, since the
+ *  plugin's users already know what the badge means. Not used on the web
+ *  (see WORKFLOW_BADGE_TOOLTIP_LABELS for workflow-review's title badge,
+ *  whose audience needs the badge explained, not just labeled). */
 export const BADGE_TOOLTIP_LABELS: Record<AssessmentBadge, string> = {
   [-1]: "We haven't checked yet",
   0: "We looked, but can't tell",
   1: 'We have significant concerns',
   2: 'We have some concerns',
   3: 'Looks good, have fun!',
+};
+
+/** Tooltip copy for workflow-review's title badge — unlike
+ *  BADGE_TOOLTIP_LABELS, this spells out what's being assessed (the
+ *  workflow's models) for visitors who may be seeing this badge for the
+ *  first time, not just the plugin's already-oriented users. */
+export const WORKFLOW_BADGE_TOOLTIP_LABELS: Record<AssessmentBadge, string> = {
+  [-1]: "This workflow's models haven't been reviewed yet.",
+  0: "We don't have enough information to assess this workflow's models.",
+  1: 'This workflow uses models with significant known risks.',
+  2: 'This workflow uses models with some known concerns.',
+  3: "This workflow's models have been reviewed and look good.",
 };
 
 /** Visible text-tag copy — for surfaces that show an actual pill with a

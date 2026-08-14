@@ -6,7 +6,7 @@ import { createPortal } from 'react-dom';
 
 const TOOLTIP_MAX_W = 220;
 
-export function InfoTooltip({ text }: { text: string }) {
+export function InfoTooltip({ text, children }: { text: string; children?: React.ReactNode }) {
   const iconRef = useRef<HTMLSpanElement>(null);
   const [mounted, setMounted] = useState(false);
   const [visible, setVisible] = useState(false);
@@ -39,9 +39,13 @@ export function InfoTooltip({ text }: { text: string }) {
         ref={iconRef}
         onMouseEnter={show}
         onMouseLeave={() => setVisible(false)}
-        className="w-3 h-3 rounded-full border border-[#D4D4D4] text-[#B0B0B0] text-[8px] font-semibold inline-flex items-center justify-center cursor-default select-none leading-none"
+        className={
+          children
+            ? 'inline-flex'
+            : 'w-3 h-3 rounded-full border border-[#D4D4D4] text-[#B0B0B0] text-[8px] font-semibold inline-flex items-center justify-center cursor-default select-none leading-none'
+        }
       >
-        i
+        {children ?? 'i'}
       </span>
       {mounted &&
         createPortal(
